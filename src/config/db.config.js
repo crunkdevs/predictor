@@ -23,7 +23,6 @@ export async function initSchema() {
       image_id BIGINT PRIMARY KEY REFERENCES images_store(id) ON DELETE CASCADE,
       numbers SMALLINT[] NOT NULL,               -- e.g. {4,3,9}
       result  INTEGER NOT NULL,                  -- 0..27 only
-      winners INTEGER NOT NULL,                  -- e.g. 462
 
       -- Even / Odd from result
       result_parity TEXT GENERATED ALWAYS AS (
@@ -58,7 +57,7 @@ export async function initSchema() {
 
       parsed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-      -- Guard invalid results so generated cols never NULL
+      -- Guard invalid results
       CONSTRAINT result_valid CHECK (result BETWEEN 0 AND 27)
     );
 
@@ -85,12 +84,11 @@ export async function initSchema() {
     CREATE TABLE IF NOT EXISTS predictions (
       id BIGSERIAL PRIMARY KEY,
       based_on_image_id BIGINT REFERENCES image_stats(image_id) ON DELETE CASCADE,
-      summary JSONB NOT NULL,      -- history snapshot fed to GPT
-      prediction JSONB NOT NULL,   -- GPT's forecast JSON
+      summary JSONB NOT NULL,
+      prediction JSONB NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
-    -- Helpful index
     CREATE INDEX IF NOT EXISTS idx_images_store_created_at ON images_store(created_at DESC);
   `);
 }

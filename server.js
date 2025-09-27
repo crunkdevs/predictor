@@ -4,6 +4,7 @@ import { initSchema } from './src/config/db.config.js';
 import imageRoutes from './src/routes/image.route.js';
 import { ingestBatch } from './src/utils/ingest.js';
 import { startScheduler } from './src/services/scheduler.service.js';
+import { applyStatsSchema } from './src/models/stats.model.js';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -22,6 +23,7 @@ app.use((err, _req, res, _next) => {
 });
 
 await initSchema();
+await applyStatsSchema();
 console.log('📦 DB schema ready');
 console.log(`📂 Watching: ${WATCH_DIR}`);
 
