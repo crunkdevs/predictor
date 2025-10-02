@@ -31,12 +31,12 @@ await applyAdvancedAnalyticsSchema();
 console.log('📦 DB schema ready');
 console.log(`📂 Watching: ${WATCH_DIR}`);
 
-try {
-  await ingestBatch();
-  console.log('✅ Initial ingest sweep done');
-} catch (e) {
-  console.error('❌ Initial ingest failed:', e);
-}
+// try {
+//   await ingestBatch();
+//   console.log('✅ Initial ingest sweep done');
+// } catch (e) {
+//   console.error('❌ Initial ingest failed:', e);
+// }
 
 startScheduler(console);
 
