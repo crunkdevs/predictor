@@ -17,7 +17,8 @@
     "mime-types": "^2.1.35",
     "node-cron": "^3.0.3",
     "openai": "^5.20.3",
-    "pg": "^8.11.5"
+    "pg": "^8.11.5",
+    "ws": "^8.18.3"
   },
   "description": "",
   "main": "server.js",
