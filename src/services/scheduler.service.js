@@ -5,7 +5,7 @@ import { analyzeLatestUnprocessed } from './analyzer.service.js';
 
 const TZ = process.env.SCHEDULER_TZ || 'Asia/Karachi';
 // Run every 10 seconds by default (avoid noisy per-second ticks)
-const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '* * * * * *';
+const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '*/10 * * * * *';
 
 // Simple PG advisory lock to prevent overlapping runs across processes
 async function withPgLock(lockKey, fn, logger = console) {
