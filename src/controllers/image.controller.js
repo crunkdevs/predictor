@@ -5,25 +5,39 @@ import crypto from 'node:crypto';
 import { getImages, getImageById, insertOrGetImage } from '../models/image.model.js';
 import { analyzeLatestUnprocessed } from '../services/analyzer.service.js';
 
-function ok(res, data) { return res.json({ ok: true, ...data }); }
-function bad(res, code, msg) { return res.status(code).json({ ok: false, error: msg }); }
+function ok(res, data) {
+  return res.json({ ok: true, ...data });
+}
+function bad(res, code, msg) {
+  return res.status(code).json({ ok: false, error: msg });
+}
 
 export async function listImages(req, res) {
-  const limit = Math.min(Number(req.query.limit || 20), 200);
-  const offset = Number(req.query.offset || 0);
-  const rows = await getImages(limit, offset);
-  return ok(res, { items: rows, limit, offset });
+  try {
+    const limit = Math.min(Number(req.query.limit || 20), 200);
+    const offset = Number(req.query.offset || 0);
+    const rows = await getImages(limit, offset);
+    return ok(res, { items: rows, limit, offset });
+  } catch (e) {
+    console.error('[listImages] error:', e);
+    return bad(res, 500, e?.message || 'failed');
+  }
 }
 
 export async function getImage(req, res) {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return bad(res, 400, 'invalid id');
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return bad(res, 400, 'invalid id');
 
-  const row = await getImageById(id);
-  if (!row) return res.status(404).send('Not found');
+    const row = await getImageById(id);
+    if (!row) return res.status(404).send('Not found');
 
-  res.setHeader('Content-Type', row.mime_type || 'application/octet-stream');
-  return res.send(row.bytes);
+    res.setHeader('Content-Type', row.mime_type || 'application/octet-stream');
+    return res.send(row.bytes);
+  } catch (e) {
+    console.error('[getImage] error:', e);
+    return bad(res, 500, e?.message || 'failed');
+  }
 }
 
 export async function uploadB64(req, res) {
@@ -59,10 +73,14 @@ export async function uploadB64(req, res) {
       buffer: buf,
     });
 
+    analyzeLatestUnprocessed().catch((e) =>
+      console.error('[uploadB64] analyze trigger failed:', e?.message || e)
+    );
+
     return ok(res, { image: row, inserted, saved_path: full });
   } catch (e) {
-    console.error('uploadB64 error:', e);
-    return bad(res, 500, e.message || 'failed');
+    console.error('[uploadB64] error:', e);
+    return bad(res, 500, e?.message || 'failed');
   }
 }
 
@@ -71,6 +89,7 @@ export async function analyzeRun(_req, res) {
     const out = await analyzeLatestUnprocessed();
     return ok(res, { out });
   } catch (e) {
-    return bad(res, 500, e.message || 'failed');
+    console.error('[analyzeRun] error:', e);
+    return bad(res, 500, e?.message || 'failed');
   }
 }

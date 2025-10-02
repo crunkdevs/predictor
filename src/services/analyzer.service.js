@@ -11,7 +11,6 @@ import { parseGameScreenshot } from './image-info-extract.service.js';
 
 import {
   advancedAnalyticsBundle,
-  refreshAnalyticsMaterializedViews,
   predictionLogsSummary,
   recentPredictionLogsRaw,
 } from '../analytics/analytics.handlers.js';
@@ -34,8 +33,6 @@ const TEMP = IS_GPT5
     : 0.7;
 
 const PRED_MIN_SECONDS = Number(process.env.PRED_MIN_SECONDS || 40);
-const REFRESH_AFTER_INGEST =
-  String(process.env.REFRESH_AFTER_INGEST || 'true').toLowerCase() === 'true';
 
 const COLOR_MAP = {
   Red: [0, 1, 26, 27],
@@ -168,12 +165,6 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         }
       } catch (e) {
         logger.error?.('[Analyzer] completeLatestPendingWithActual failed:', e?.message || e);
-      }
-
-      if (REFRESH_AFTER_INGEST) {
-        try {
-          await refreshAnalyticsMaterializedViews();
-        } catch {}
       }
 
       const bundle = await advancedAnalyticsBundle(imageId, {

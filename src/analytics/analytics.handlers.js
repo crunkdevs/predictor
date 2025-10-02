@@ -428,15 +428,27 @@ export async function buildFourteenSystems() {
   return { number_rules, range_systems, color_behaviour, time_buckets };
 }
 
+
+export async function refreshAnalyticsMaterializedViews() {
+  try {
+    await pool.query('SELECT refresh_mv_color_runs()');
+  } catch {}
+  try {
+    await pool.query('SELECT refresh_mv_accuracy_hourly()');
+  } catch {}
+  try {
+    await pool.query('SELECT refresh_mv_accuracy_breakdown()');
+  } catch {}
+}
+
 export async function advancedAnalyticsBundle(anchorImageId, opts = {}) {
   const lookback = Number(opts.lookback || process.env.PRED_LOOKBACK || 200);
   const k = Number(opts.topk || process.env.PRED_TOPK || 5);
 
-  if (String(process.env.REFRESH_AFTER_INGEST || 'false').toLowerCase() === 'true') {
-    try {
-      await refreshAnalyticsMaterializedViews();
-    } catch {}
-  }
+try {
+  await refreshAnalyticsMaterializedViews();
+} catch (e) {
+}
 
   const [windows, coreStats, gaps, gapsExt, ratio, patterns, runs, fourteen] = await Promise.all([
     windowsSummary(lookback),
@@ -467,18 +479,6 @@ export async function advancedAnalyticsBundle(anchorImageId, opts = {}) {
     color_behaviour: fourteen.color_behaviour,
     time_buckets: fourteen.time_buckets,
   };
-}
-
-export async function refreshAnalyticsMaterializedViews() {
-  try {
-    await pool.query('SELECT refresh_mv_color_runs()');
-  } catch {}
-  try {
-    await pool.query('SELECT refresh_mv_accuracy_hourly()');
-  } catch {}
-  try {
-    await pool.query('SELECT refresh_mv_accuracy_breakdown()');
-  } catch {}
 }
 
 export async function runAnalyticsMigrations() {
