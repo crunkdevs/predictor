@@ -4,7 +4,7 @@ import { ingestBatch } from '../utils/ingest.js';
 import { analyzeLatestUnprocessed } from './analyzer.service.js';
 
 const TZ = process.env.SCHEDULER_TZ || 'Asia/Karachi';
-const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '*/10 * * * * *';
+const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '* * * * * *';
 
 export function startScheduler(logger = console) {
   logger.info?.(`[Scheduler] Starting… CRON="${CRON_SCHEDULE}" TZ=${TZ}`);
