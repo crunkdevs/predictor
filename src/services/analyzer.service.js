@@ -166,12 +166,7 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
       } catch (e) {
         logger.error?.('[Analyzer] completeLatestPendingWithActual failed:', e?.message || e);
       }
-
-      const bundle = await advancedAnalyticsBundle(imageId, {
-        lookback: LOOKBACK,
-        topk: HOTCOLD_K,
-      });
-
+      
       const { rows: predCheck } = await pool.query(
         `SELECT 1 FROM predictions WHERE based_on_image_id = $1 LIMIT 1`,
         [imageId]
@@ -180,6 +175,11 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         logger.log?.(`[Analyzer] prediction already exists for image=${imageId}, skipping OpenAI call`);
         continue;
       }
+
+      const bundle = await advancedAnalyticsBundle(imageId, {
+        lookback: LOOKBACK,
+        topk: HOTCOLD_K,
+      });
 
       const digit_shuffle = digitShuffleSummary(parsed);
 
