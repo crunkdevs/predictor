@@ -166,13 +166,15 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
       } catch (e) {
         logger.error?.('[Analyzer] completeLatestPendingWithActual failed:', e?.message || e);
       }
-      
+
       const { rows: predCheck } = await pool.query(
         `SELECT 1 FROM predictions WHERE based_on_image_id = $1 LIMIT 1`,
         [imageId]
       );
       if (predCheck.length) {
-        logger.log?.(`[Analyzer] prediction already exists for image=${imageId}, skipping OpenAI call`);
+        logger.log?.(
+          `[Analyzer] prediction already exists for image=${imageId}, skipping OpenAI call`
+        );
         continue;
       }
 
@@ -319,15 +321,29 @@ Return STRICT JSON with EXACT keys:
         sum_ok: sum > 0.99 && sum < 1.01,
       };
 
-      await pool.query(
+      // await pool.query(
+      //   `INSERT INTO predictions (based_on_image_id, summary, prediction)
+      //    VALUES ($1, $2::jsonb, $3::jsonb)`,
+      //   [imageId, JSON.stringify(payload.bundle), JSON.stringify(prediction)]
+      // );
+
+      const insPred = await pool.query(
         `INSERT INTO predictions (based_on_image_id, summary, prediction)
-         VALUES ($1, $2::jsonb, $3::jsonb)`,
+          VALUES ($1, $2::jsonb, $3::jsonb)
+          ON CONFLICT (based_on_image_id) DO NOTHING
+          RETURNING id`,
         [imageId, JSON.stringify(payload.bundle), JSON.stringify(prediction)]
       );
+
+      if (!insPred.rows.length) {
+        logger.log?.(`[Predict] image=${imageId} already has prediction, skipping`);
+        continue;
+      }
 
       const distEntries = Object.entries(prediction.predicted_distribution || {}).sort(
         (a, b) => Number(b[1]) - Number(a[1])
       );
+
       const predictedNumbers = [];
       for (const [k] of distEntries) {
         const n = Math.max(0, Math.min(27, Number(k) | 0));

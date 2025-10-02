@@ -1,5 +1,3 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import crypto from 'node:crypto';
 
 import { getImages, getImageById, insertOrGetImage } from '../models/image.model.js';
@@ -52,18 +50,12 @@ export async function uploadB64(req, res) {
       return bad(res, 400, 'filename & content_b64 required');
     }
 
-    const b64 = content_b64.startsWith('data:')
-      ? content_b64.split(',')[1]
-      : content_b64;
+    const b64 = content_b64.startsWith('data:') ? content_b64.split(',')[1] : content_b64;
     const buf = Buffer.from(b64, 'base64');
 
     const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
 
-    const dir = process.env.WATCH_DIR || './images';
-    await fs.mkdir(dir, { recursive: true });
     const safe = filename.replace(/[^\w.\-]/g, '_');
-    const full = path.join(dir, safe);
-    await fs.writeFile(full, buf);
 
     const { row, inserted } = await insertOrGetImage({
       fileName: safe,
@@ -77,7 +69,7 @@ export async function uploadB64(req, res) {
       console.error('[uploadB64] analyze trigger failed:', e?.message || e)
     );
 
-    return ok(res, { image: row, inserted, saved_path: full });
+    return ok(res, { image: row, inserted });
   } catch (e) {
     console.error('[uploadB64] error:', e);
     return bad(res, 500, e?.message || 'failed');

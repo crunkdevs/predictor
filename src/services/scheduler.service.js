@@ -37,17 +37,21 @@ export function startScheduler(logger = console) {
       const tickIso = new Date().toISOString();
       logger.log?.(`\n⏰ Cron tick at ${tickIso} (server clock UTC)`);
 
-      await withPgLock(42842, async () => {
-        // Lightweight diag (helps confirm DB time & image count)
-        const { rows } = await pool.query(
-          `SELECT now() AS db_now_utc, COUNT(*) AS total_images FROM images_store;`
-        );
-        logger.log?.('[Scheduler][Diag]', rows?.[0]);
+      await withPgLock(
+        42842,
+        async () => {
+          // Lightweight diag (helps confirm DB time & image count)
+          const { rows } = await pool.query(
+            `SELECT now() AS db_now_utc, COUNT(*) AS total_images FROM images_store;`
+          );
+          logger.log?.('[Scheduler][Diag]', rows?.[0]);
 
-        // Only analyze; no ingest, no mat-view refresh here
-        await analyzeLatestUnprocessed(logger);
-        logger.log?.('[Scheduler] analyze ✅');
-      }, logger);
+          // Only analyze; no ingest, no mat-view refresh here
+          await analyzeLatestUnprocessed(logger);
+          logger.log?.('[Scheduler] analyze ✅');
+        },
+        logger
+      );
     },
     { timezone: TZ }
   );

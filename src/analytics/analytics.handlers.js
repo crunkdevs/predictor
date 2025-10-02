@@ -428,7 +428,6 @@ export async function buildFourteenSystems() {
   return { number_rules, range_systems, color_behaviour, time_buckets };
 }
 
-
 export async function refreshAnalyticsMaterializedViews() {
   try {
     await pool.query('SELECT refresh_mv_color_runs()');
@@ -445,10 +444,11 @@ export async function advancedAnalyticsBundle(anchorImageId, opts = {}) {
   const lookback = Number(opts.lookback || process.env.PRED_LOOKBACK || 200);
   const k = Number(opts.topk || process.env.PRED_TOPK || 5);
 
-try {
-  await refreshAnalyticsMaterializedViews();
-} catch (e) {
-}
+  try {
+    await refreshAnalyticsMaterializedViews();
+  } catch (e) {
+    console.error(e);
+  }
 
   const [windows, coreStats, gaps, gapsExt, ratio, patterns, runs, fourteen] = await Promise.all([
     windowsSummary(lookback),

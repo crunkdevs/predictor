@@ -1,10 +1,5 @@
 import { Router } from 'express';
-import {
-  listImages,
-  getImage,
-  uploadB64,
-  analyzeRun
-} from '../controllers/image.controller.js';
+import { listImages, getImage, uploadB64, analyzeRun } from '../controllers/image.controller.js';
 
 const router = Router();
 

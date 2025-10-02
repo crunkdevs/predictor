@@ -46,7 +46,7 @@ Rules:
   try {
     parsed = JSON.parse(text);
   } catch (err) {
-    throw new Error(`❌ Could not parse JSON: ${text}`);
+    throw new Error(`❌ Could not parse JSON: ${text}`, err);
   }
 
   return {
