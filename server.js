@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import { initSchema } from './src/config/db.config.js';
 import imageRoutes from './src/routes/image.route.js';
+import analyticsRoutes from './src/routes/analytics.route.js';
 import { startScheduler } from './src/services/scheduler.service.js';
 import {
   applyAdvancedAnalyticsSchema,
@@ -17,6 +18,7 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/health', (_req, res) => res.status(200).send('ok'));
 
 app.use('/api', imageRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 app.use((err, _req, res) => {
   console.error('Error:', err);
