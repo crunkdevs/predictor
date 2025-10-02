@@ -172,6 +172,15 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         topk: HOTCOLD_K,
       });
 
+      const { rows: predCheck } = await pool.query(
+        `SELECT 1 FROM predictions WHERE based_on_image_id = $1 LIMIT 1`,
+        [imageId]
+      );
+      if (predCheck.length) {
+        logger.log?.(`[Analyzer] prediction already exists for image=${imageId}, skipping OpenAI call`);
+        continue;
+      }
+
       const digit_shuffle = digitShuffleSummary(parsed);
 
       const instruction = `
