@@ -22,8 +22,11 @@ app.get('/health', (_req, res) => res.status(200).send('ok'));
 app.use('/api', imageRoutes);
 app.use('/api/analytics', analyticsRoutes);
 
-app.use((err, _req, res, _next) => {
+app.use(function (err, req, res, next) {
   console.error('Error:', err);
+  if (res.headersSent) {
+    return next(err);
+  }
   res.status(500).json({ message: err?.message || 'Internal error' });
 });
 
