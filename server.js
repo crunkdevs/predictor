@@ -38,6 +38,6 @@ const server = http.createServer(app);
 
 setupAnalyticsWS(server, { path: '/ws/analytics' });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+server.listen(PORT, () => {
+  console.log(`🚀 Server + WS running on http://localhost:${PORT}`);
 });
