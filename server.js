@@ -22,14 +22,6 @@ app.get('/health', (_req, res) => res.status(200).send('ok'));
 app.use('/api', imageRoutes);
 app.use('/api/analytics', analyticsRoutes);
 
-app.use(function (err, req, res, next) {
-  console.error('Error:', err);
-  if (res.headersSent) {
-    return next(err);
-  }
-  res.status(500).json({ message: err?.message || 'Internal error' });
-});
-
 await initSchema();
 await applyStatsSchema();
 await applyAdvancedAnalyticsSchema();
@@ -40,6 +32,14 @@ startScheduler(console);
 const server = http.createServer(app);
 
 setupAnalyticsWS(server, { path: '/ws/analytics' });
+
+app.use(function (err, req, res, next) {
+  console.error('Error:', err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(500).json({ message: err?.message || 'Internal error' });
+});
 
 server.listen(PORT, () => {
   console.log(`🚀 Server + WS running on http://localhost:${PORT}`);
