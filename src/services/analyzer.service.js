@@ -19,6 +19,7 @@ import {
   insertPredictionLog,
   completeLatestPendingWithActual,
 } from '../models/prediction-logs.model.js';
+import { pushAnalytics } from '../analytics/analytics.ws.js';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -359,6 +360,16 @@ Return STRICT JSON with EXACT keys:
         predictedSize: sizeOf(prediction.top_result),
         confidence: Number(prediction.top_probability),
       });
+
+      try {
+        pushAnalytics('analytics/prediction', {
+          based_on_image_id: imageId,
+          top_result: prediction.top_result,
+          top_probability: prediction.top_probability,
+          predicted_next: prediction.predicted_next,
+          created_at: new Date().toISOString(),
+        });
+      } catch {}
 
       logger.log?.(
         `[Predict] image=${imageId} → next=${prediction.predicted_next} (p=${prediction.top_probability?.toFixed?.(4)})`

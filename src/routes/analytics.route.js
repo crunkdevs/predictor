@@ -17,6 +17,7 @@ import {
   accuracyHourly,
   accuracyBreakdown,
 } from '../controllers/analytics.controller.js';
+import { predictionLogsSummary, recentPredictionLogsRaw } from '../analytics/analytics.handlers.js';
 
 const r = Router();
 
@@ -38,5 +39,8 @@ r.get('/accuracy/breakdown', accuracyBreakdown);
 
 r.post('/refresh', refresh);
 r.post('/migrate', migrate);
+
+r.get('/predictions/logs', recentPredictionLogsRaw);
+r.get('/predictions/logs/summary', predictionLogsSummary);
 
 export default r;
