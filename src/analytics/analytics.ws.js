@@ -1,19 +1,17 @@
 import { WebSocketServer } from 'ws';
 import { pool } from '../config/db.config.js';
-
 import {
   getLatestAnchorImageId,
   advancedAnalyticsBundle,
   refreshAnalyticsMaterializedViews,
   predictionLogsSummary,
   recentPredictionLogsRaw,
-} from '../analytics/analytics.handlers.js';
+} from './analytics.handlers.js';
 
-const CLIENTS = new Set();
 let wss;
+const CLIENTS = new Set();
 
 async function fetchAccuracyHourly(limit = 168) {
-  // if MV not present, return []
   const chk = await pool.query(
     `SELECT 1 FROM pg_matviews WHERE schemaname='public' AND matviewname='mv_accuracy_hourly'`
   );
@@ -51,7 +49,6 @@ async function buildEnrichedBundle(anchorImageId) {
     recentPredictionLogsRaw({ limit: 50 }).catch(() => []),
     predictionLogsSummary({ limit: 200 }).catch(() => null),
   ]);
-
   return {
     ...base,
     accuracy_hourly: accHourly,
@@ -61,23 +58,27 @@ async function buildEnrichedBundle(anchorImageId) {
   };
 }
 
-/** Mount a WS endpoint for analytics only (e.g., /ws/analytics) */
 export function setupAnalyticsWS(httpServer, { path = '/ws/analytics' } = {}) {
   wss = new WebSocketServer({ noServer: true });
 
   httpServer.on('upgrade', (req, socket, head) => {
-    if (!req.url || !req.url.startsWith(path)) return socket.destroy();
+    // tolerate trailing slash & queries
+    const u = new URL(req.url, 'http://localhost');
+    if (!u.pathname.startsWith(path)) return socket.destroy();
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req);
     });
   });
 
-  wss.on('connection', async (ws) => {
+  wss.on('connection', async (ws, req) => {
+    ws.isAlive = true;
+    ws.on('pong', () => (ws.isAlive = true));
     CLIENTS.add(ws);
     ws.on('close', () => CLIENTS.delete(ws));
+
+    console.log('[WS] connected', req.socket.remoteAddress);
     safeSend(ws, { type: 'analytics/hello', ts: Date.now() });
 
-    // initial snapshot (latest anchor) → enriched bundle
     try {
       const anchor = await getLatestAnchorImageId();
       const bundle = await buildEnrichedBundle(anchor);
@@ -87,10 +88,12 @@ export function setupAnalyticsWS(httpServer, { path = '/ws/analytics' } = {}) {
     }
   });
 
-  // heartbeat (optional)
+  // heartbeat: terminate dead connections & keep proxies happy
   const iv = setInterval(() => {
-    for (const ws of CLIENTS) {
-      if (ws.readyState === 1) safeSend(ws, { type: 'ping', ts: Date.now() });
+    for (const ws of wss.clients) {
+      if (ws.isAlive === false) return ws.terminate();
+      ws.isAlive = false;
+      ws.ping();
     }
   }, 30_000);
   wss.on('close', () => clearInterval(iv));
