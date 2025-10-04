@@ -486,7 +486,7 @@ export async function runAnalyticsMigrations() {
   await applyAdvancedAnalyticsSchema();
 }
 
-export async function predictionLogsSummary({ limit = 200 } = {}) {
+export async function predictionLogsSummary({ limit = 200, k = 10 } = {}) {
   const { rows } = await pool.query(
     `
     SELECT id, created_at, predicted_numbers, confidence, correct
@@ -553,7 +553,7 @@ export async function predictionLogsSummary({ limit = 200 } = {}) {
   }
   out.current_streak = { type: streakType, length: streakLen };
 
-  out.last_k_preview = rows.slice(0, 10).map((r) => ({
+  out.last_k_preview = rows.slice(0, Math.max(1, k)).map((r) => ({
     id: r.id,
     ts: r.created_at,
     preds: r.predicted_numbers,
