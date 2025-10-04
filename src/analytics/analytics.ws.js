@@ -14,7 +14,6 @@ import {
   rangeSystemsTags,
   buildFourteenSystems,
   refreshAnalyticsMaterializedViews,
-  fetchPredictionLogs,
   predictionLogsSummary,
 } from '../analytics/analytics.handlers.js';
 
@@ -46,11 +45,6 @@ async function getTopicData(topic, params = {}) {
       const lookback = p('lookback', 500);
       const gaps_extended = await gapStatsExtended(lookback);
       return { gaps_extended };
-    }
-    case 'predictionsLog': {
-      const limit = p('limit', 500);
-      const rows = await fetchPredictionLogs(limit);
-      return { rows };
     }
     case 'predictionsLogSummary': {
       const window = params?.window || 'hour';

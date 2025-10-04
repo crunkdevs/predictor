@@ -16,27 +16,6 @@ export async function getLatestAnchorImageId() {
   return rows[0]?.image_id ?? null;
 }
 
-export async function fetchPredictionLogs(limit = 500) {
-  const { colImage, colPred, colTop, colProb, colTs } = await _detectPredictionLogCols(pool);
-
-  const { rows } = await pool.query(
-    `
-    SELECT
-      id,
-      ${colImage}             AS based_on_image_id,
-      ${colPred}              AS predicted_next,
-      ${colTop}               AS top_result,
-      (${colProb})::float     AS top_probability,
-      ${colTs}                AS created_at
-    FROM prediction_logs
-    ORDER BY ${colTs} DESC
-    LIMIT $1
-    `,
-    [Math.max(10, Math.min(2000, Number(limit) || 500))]
-  );
-
-  return rows || [];
-}
 
 export async function ensureAnchorExists(anchorId) {
   if (!Number.isFinite(anchorId)) return null;

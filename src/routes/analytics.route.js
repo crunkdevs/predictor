@@ -16,7 +16,6 @@ import {
   migrate,
   accuracyHourly,
   accuracyBreakdown,
-  predictionsLog,
   predictionsLogSummary,
 } from '../controllers/analytics.controller.js';
 
@@ -41,7 +40,6 @@ r.get('/accuracy/breakdown', accuracyBreakdown);
 r.post('/refresh', refresh);
 r.post('/migrate', migrate);
 
-r.get('/predictions/logs', predictionsLog);
 r.get('/predictions/logs/summary', predictionsLogSummary);
 
 export default r;
