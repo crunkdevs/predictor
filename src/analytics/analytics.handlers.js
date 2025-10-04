@@ -17,20 +17,25 @@ export async function getLatestAnchorImageId() {
 }
 
 export async function fetchPredictionLogs(limit = 500) {
+  const { colImage, colPred, colTop, colProb, colTs } = await _detectPredictionLogCols(pool);
+
   const { rows } = await pool.query(
-    `SELECT
-       id,
-       based_on_image_id,
-       predicted_next,
-       top_result,
-       top_probability,
-       created_at
-     FROM prediction_logs
-     ORDER BY created_at DESC
-     LIMIT $1`,
-    [limit]
+    `
+    SELECT
+      id,
+      ${colImage}             AS based_on_image_id,
+      ${colPred}              AS predicted_next,
+      ${colTop}               AS top_result,
+      (${colProb})::float     AS top_probability,
+      ${colTs}                AS created_at
+    FROM prediction_logs
+    ORDER BY ${colTs} DESC
+    LIMIT $1
+    `,
+    [Math.max(10, Math.min(2000, Number(limit) || 500))]
   );
-  return rows;
+
+  return rows || [];
 }
 
 export async function ensureAnchorExists(anchorId) {
@@ -580,6 +585,35 @@ export async function predictionLogsSummary({ limit = 200 } = {}) {
   return out;
 }
 
+async function _detectPredictionLogCols(pool) {
+  const { rows } = await pool.query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_name = 'prediction_logs'
+  `);
+  const cols = new Set(rows.map(r => r.column_name));
+
+  const pick = (...names) => names.find(n => cols.has(n)) || null;
+
+  const colImage = pick('based_on_image_id', 'image_id');
+  const colPred  = pick('predicted_next', 'predicted', 'prediction', 'predicted_num');
+  const colTop   = pick('top_result', 'actual_result', 'result');
+  const colProb  = pick('top_probability', 'probability', 'confidence');
+  const colTs    = pick('created_at', 'inserted_at', 'createdon');
+
+  const missing = [];
+  if (!colImage) missing.push('based_on_image_id');
+  if (!colPred)  missing.push('predicted_next');
+  if (!colTop)   missing.push('top_result');
+  if (!colProb)  missing.push('top_probability');
+  if (!colTs)    missing.push('created_at');
+  if (missing.length) {
+    const have = [...cols].sort().join(', ');
+    throw new Error(`prediction_logs incompatible: missing ${missing.join(', ')}; existing: ${have}`);
+  }
+  return { colImage, colPred, colTop, colProb, colTs };
+}
+
 export async function recentPredictionLogsRaw({ limit = 25 } = {}) {
   const { rows } = await pool.query(
     `
@@ -638,5 +672,6 @@ export default {
   refreshAnalyticsMaterializedViews,
   runAnalyticsMigrations,
   predictionLogsSummary,
+  _detectPredictionLogCols,
   recentPredictionLogsRaw,
 };

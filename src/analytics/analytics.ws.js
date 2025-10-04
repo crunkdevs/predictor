@@ -53,7 +53,7 @@ async function getTopicData(topic, params = {}) {
       return { rows };
     }
     case 'predictionsLogSummary': {
-      const window = params?.window || 'hour'; // 'hour' | 'day'
+      const window = params?.window || 'hour';
       const limit = p('limit', 168);
       const rows = await predictionLogsSummary({ window, limit });
       return { rows };
