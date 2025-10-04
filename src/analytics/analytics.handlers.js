@@ -16,6 +16,23 @@ export async function getLatestAnchorImageId() {
   return rows[0]?.image_id ?? null;
 }
 
+export async function fetchPredictionLogs(limit = 500) {
+  const { rows } = await pool.query(
+    `SELECT
+       id,
+       based_on_image_id,
+       predicted_next,
+       top_result,
+       top_probability,
+       created_at
+     FROM prediction_logs
+     ORDER BY created_at DESC
+     LIMIT $1`,
+    [limit]
+  );
+  return rows;
+}
+
 export async function ensureAnchorExists(anchorId) {
   if (!Number.isFinite(anchorId)) return null;
   const { rows } = await pool.query(`SELECT 1 FROM v_spins WHERE image_id = $1 LIMIT 1`, [

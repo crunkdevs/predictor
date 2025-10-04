@@ -45,6 +45,11 @@ async function getTopicData(topic, params = {}) {
       const gaps_extended = await gapStatsExtended(lookback);
       return { gaps_extended };
     }
+    case 'predictionsLog': {
+      const limit = p('limit', 500);
+      const rows = await fetchPredictionLogs(limit);
+      return { rows };
+    }
     case 'ratios': {
       const lookback = p('lookback', 50);
       const r = await ratios(lookback);
@@ -90,7 +95,7 @@ async function getTopicData(topic, params = {}) {
 }
 
 function safeSend(ws, obj) {
-  try { ws.send(JSON.stringify(obj)); } catch {}
+  try { ws.send(JSON.stringify(obj)); } catch { }
 }
 
 /** Mount a WS endpoint for analytics only (e.g., /ws/analytics) */
@@ -173,7 +178,7 @@ export async function pushFreshBundle() {
 }
 
 export async function refreshAndPush() {
-  try { await refreshAnalyticsMaterializedViews(); } catch {}
+  try { await refreshAnalyticsMaterializedViews(); } catch { }
   await pushFreshBundle();
 }
 
