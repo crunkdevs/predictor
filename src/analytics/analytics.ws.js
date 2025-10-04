@@ -14,6 +14,8 @@ import {
   rangeSystemsTags,
   buildFourteenSystems,
   refreshAnalyticsMaterializedViews,
+  fetchPredictionLogs,
+  predictionLogsSummary,
 } from '../analytics/analytics.handlers.js';
 
 const CLIENTS = new Set();
@@ -48,6 +50,12 @@ async function getTopicData(topic, params = {}) {
     case 'predictionsLog': {
       const limit = p('limit', 500);
       const rows = await fetchPredictionLogs(limit);
+      return { rows };
+    }
+    case 'predictionsLogSummary': {
+      const window = params?.window || 'hour'; // 'hour' | 'day'
+      const limit = p('limit', 168);
+      const rows = await predictionLogsSummary({ window, limit });
       return { rows };
     }
     case 'ratios': {

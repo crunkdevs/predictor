@@ -15,6 +15,8 @@ import {
   buildFourteenSystems,
   advancedAnalyticsBundle,
   runAnalyticsMigrations,
+  predictionLogsSummary,
+  fetchPredictionLogs,
 } from '../analytics/analytics.handlers.js';
 
 import { refreshAndPush, pushFreshBundle } from '../analytics/analytics.ws.js';
@@ -225,5 +227,28 @@ export async function accuracyBreakdown(req, res) {
   } catch (e) {
     console.error('[analytics.accuracyBreakdown]', e);
     return bad(res, 500, e?.message || 'failed');
+  }
+}
+
+export async function predictionsLog(req, res) {
+  try {
+    const limit = Math.max(1, Math.min(5000, Number(req.query.limit) || 500));
+    const rows = await fetchPredictionLogs(limit);
+    return res.json({ ok: true, rows });
+  } catch (e) {
+    console.error('[analytics.predictionsLog]', e);
+    return res.status(500).json({ ok: false, error: e?.message || 'failed' });
+  }
+}
+
+export async function predictionsLogSummary(req, res) {
+  try {
+    const window = (req.query.window === 'day' ? 'day' : 'hour');
+    const limit = Math.max(1, Math.min(2000, Number(req.query.limit) || 168));
+    const rows = await predictionLogsSummary({ window, limit });
+    return res.json({ ok: true, rows });
+  } catch (e) {
+    console.error('[analytics.predictionsLogSummary]', e);
+    return res.status(500).json({ ok: false, error: e?.message || 'failed' });
   }
 }
