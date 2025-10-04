@@ -13,6 +13,7 @@ import {
   timeBucketsSnapshot,
   rangeSystemsTags,
   buildFourteenSystems,
+  refreshAnalyticsMaterializedViews,
 } from '../analytics/analytics.handlers.js';
 
 const CLIENTS = new Set();
@@ -170,3 +171,10 @@ export async function pushFreshBundle() {
     pushAnalytics('analytics/error', { message: e?.message || String(e) });
   }
 }
+
+export async function refreshAndPush() {
+  try { await refreshAnalyticsMaterializedViews(); } catch {}
+  await pushFreshBundle();
+}
+
+export { getTopicData };
