@@ -44,23 +44,13 @@ const COLOR_MAP = {
   Green: [10, 11, 16, 17],
   Gray: [12, 13, 14, 15],
 };
-
-function clampAndNormalizeDistribution(distRaw = {}) {
-  const dist = {};
-  for (let i = 0; i <= 27; i++) {
-    const k = String(i);
-    const p = Number(distRaw[k] ?? 0);
-    dist[k] = Number.isFinite(p) && p > 0 ? p : 0;
-  }
-  let sum = Object.values(dist).reduce((a, b) => a + b, 0);
-  if (sum <= 0) {
-    const u = 1 / 28;
-    for (let i = 0; i <= 27; i++) dist[String(i)] = u;
-    return dist;
-  }
-  for (let i = 0; i <= 27; i++) dist[String(i)] /= sum;
-  return dist;
-}
+const numToColor = (n) => {
+  n = Number(n);
+  for (const [c, arr] of Object.entries(COLOR_MAP)) if (arr.includes(n)) return c;
+  return null;
+};
+const parityOf = (n) => (Number(n) % 2 === 0 ? 'even' : 'odd');
+const sizeOf = (n) => (Number(n) >= 0 && Number(n) <= 13 ? 'small' : 'big');
 
 function argmaxKeyed(dist) {
   let bestK = '0';
@@ -75,7 +65,6 @@ function argmaxKeyed(dist) {
   }
   return { result: Number(bestK), prob: bestP };
 }
-
 async function latestPredictionTime() {
   const { rows } = await pool.query(`
     SELECT created_at
@@ -86,14 +75,157 @@ async function latestPredictionTime() {
   return rows[0]?.created_at ? new Date(rows[0].created_at) : null;
 }
 
-const colorOf = (n) => {
-  n = Number(n);
-  for (const [col, arr] of Object.entries(COLOR_MAP)) if (arr.includes(n)) return col;
-  return null;
-};
-const parityOf = (n) => (Number(n) % 2 === 0 ? 'even' : 'odd');
-const sizeOf = (n) => (Number(n) >= 0 && Number(n) <= 13 ? 'small' : 'big');
+/** ==== NEW: BASELINE PRIOR (100% tumhara data use) ==== */
+/**
+ * windows/gaps/gaps_ext/ratios/color_runs/time_buckets ko mila ke 0..27 prior banao
+ * Tunables: weights, boosts
+ */
+function buildBaselinePrior(bundle, cfg = {}) {
+  const {
+    w20 = 0.55,
+    w100 = 0.25,
+    w200 = 0.1,
+    wtot = 0.1,
+    gapBoost = 0.2, // overdue → up to +20% multiplicative
+    streakBoost = 0.1, // warm→cool ya cool→warm hint
+    colorReweight = 0.1, // color marginals target vs have correction
+  } = cfg;
 
+  const N = 28;
+  const windows = bundle.windows || {};
+  const f = (map, i) => Number(map?.[String(i)] || 0);
+
+  // frequency score
+  const freq = Array.from(
+    { length: N },
+    (_, i) =>
+      w20 * f(windows.last_20, i) +
+      w100 * f(windows.last_100, i) +
+      w200 * f(windows.last_200, i) +
+      wtot * f(windows.totals, i)
+  );
+
+  // normalize to [0..1]
+  const maxF = Math.max(...freq, 1);
+  let s = freq.map((x) => x / maxF);
+
+  // gaps (since) boost
+  const sinceMap = bundle.gaps_extended?.numbers?.since || bundle.gaps?.numbers || {};
+  const lookback = Number(bundle.gaps_extended?.lookback || bundle.gaps?.lookback || 500);
+
+  for (let i = 0; i < N; i++) {
+    const k = String(i);
+    const since = Number(sinceMap[k] ?? 0);
+    const r = Math.max(0, Math.min(1, since / lookback)); // 0..1
+    s[i] *= 1 + gapBoost * r;
+  }
+
+  // streak/cluster break hint → target cluster ko nudge
+  const breakHint = bundle.color_behaviour?.break_hint;
+  if (breakHint) {
+    const target = breakHint.includes('cool')
+      ? 'Cool'
+      : breakHint.includes('warm')
+        ? 'Warm'
+        : 'Neutral';
+    for (let i = 0; i < N; i++) {
+      const c = numToColor(i);
+      if (!c) continue;
+      const isCool = c === 'Dark Blue' || c === 'Sky Blue' || c === 'Green';
+      const isWarm = c === 'Red' || c === 'Orange' || c === 'Pink';
+      const isNeutral = c === 'Gray';
+      if (
+        (target === 'Cool' && isCool) ||
+        (target === 'Warm' && isWarm) ||
+        (target === 'Neutral' && isNeutral)
+      ) {
+        s[i] *= 1 + streakBoost;
+      }
+    }
+  }
+
+  // optional: color marginals (agar bundle.ratios mein color share ho)
+  // yahan hum current share vs desired share ka small correction lagate hain
+  const desiredColor = bundle.ratios?.color || null; // { Red: x, ... } in 0..1
+  if (desiredColor) {
+    // current share calc
+    const cur = {};
+    for (let i = 0; i < N; i++) {
+      const c = numToColor(i);
+      cur[c] = (cur[c] || 0) + s[i];
+    }
+    const totalS = s.reduce((a, b) => a + b, 0) || 1;
+    for (let i = 0; i < N; i++) {
+      const c = numToColor(i);
+      if (!c) continue;
+      const target = Number(desiredColor[c] || 0);
+      const have = (cur[c] || 0) / totalS;
+      const delta = colorReweight * (target - have);
+      s[i] *= Math.max(1e-9, 1 + delta);
+    }
+  }
+
+  // normalize
+  const Z = s.reduce((a, b) => a + b, 0) || 1;
+  const prior = {};
+  for (let i = 0; i < N; i++) prior[String(i)] = s[i] / Z;
+  return prior;
+}
+
+/** ==== NEW: LLM combination helpers ==== */
+function combinePrior(prior, mults, { tau = 1.05, eps = 0.01 } = {}) {
+  // multiplier bounds: 0.6..1.6 (hard guardrails)
+  const out = {};
+  let Z = 0;
+  for (let i = 0; i <= 27; i++) {
+    const k = String(i);
+    const p = Math.max(1e-12, Number(prior[k] || 0));
+    let m = Number(mults?.[k]);
+    if (!Number.isFinite(m)) m = 1.0;
+    m = Math.max(0.6, Math.min(1.6, m));
+    out[k] = Math.pow(p * m, 1 / tau);
+    Z += out[k];
+  }
+  // epsilon exploration → avoid collapse
+  const u = 1 / 28;
+  for (let i = 0; i <= 27; i++) {
+    const k = String(i);
+    out[k] = (1 - eps) * (out[k] / Z) + eps * u;
+  }
+  return out;
+}
+
+function entropy(dist) {
+  let H = 0;
+  for (let i = 0; i <= 27; i++) {
+    const p = Math.max(1e-12, Number(dist[String(i)] || 0));
+    H += -p * Math.log(p);
+  }
+  return H;
+}
+
+// anti-repeat: recent top results ko halka penalize
+function penalizeRecent(dist, recentTop = [], alpha = 0.1) {
+  const tmp = {};
+  let Z = 0;
+  const penalties = new Map();
+  recentTop.forEach((n, idx) => {
+    const w = (alpha * (recentTop.length - idx)) / Math.max(1, recentTop.length);
+    penalties.set(String(n), (penalties.get(String(n)) || 0) + w);
+  });
+  for (let i = 0; i <= 27; i++) {
+    const k = String(i);
+    const p = Math.max(0, Number(dist[k] || 0));
+    const f = Math.max(1e-9, 1 - (penalties.get(k) || 0));
+    tmp[k] = p * f;
+    Z += tmp[k];
+  }
+  const out = {};
+  for (let i = 0; i <= 27; i++) out[String(i)] = tmp[String(i)] / (Z || 1);
+  return out;
+}
+
+/** ==== DIGIT SHUFFLE (as-is from your version) ==== */
 function digitShuffleSummary(latest) {
   const out = { category: null, sum_0_27: null, color: null, digits: [] };
   const d = (Array.isArray(latest?.numbers) ? latest.numbers : []).map((n) => Number(n));
@@ -114,10 +246,11 @@ function digitShuffleSummary(latest) {
     out.category = 'wrap_around';
   else out.category = 'all_diff';
 
-  out.color = colorOf(out.sum_0_27);
+  out.color = numToColor(out.sum_0_27);
   return out;
 }
 
+/** ================== MAIN LOOP (HYBRID PRIOR + LLM MULTIPLIERS) ================== */
 export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
   logger.log?.('[PRED CFG]', { MODEL, TEMP, LOOKBACK, HOTCOLD_K, PRED_MIN_SECONDS });
 
@@ -144,6 +277,7 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         }
       }
 
+      // 1) Parse image → stats row
       let parsed;
       try {
         parsed = await parseGameScreenshot(imageId);
@@ -151,15 +285,15 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         logger.error?.(`[Analyzer] image=${imageId} parse failed, skipping: ${e?.message || e}`);
         continue;
       }
-
       await insertImageStats({ imageId, numbers: parsed?.numbers, result: parsed?.result });
 
+      // 2) Complete last pending log with actual
       try {
         const actualNumber = Number(parsed?.result);
         if (Number.isFinite(actualNumber)) {
           await completeLatestPendingWithActual({
             actualNumber,
-            actualColor: colorOf(actualNumber),
+            actualColor: numToColor(actualNumber),
             actualParity: parityOf(actualNumber),
             actualSize: sizeOf(actualNumber),
           });
@@ -168,6 +302,7 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         logger.error?.('[Analyzer] completeLatestPendingWithActual failed:', e?.message || e);
       }
 
+      // 3) Skip if prediction already exists for this image
       const { rows: predCheck } = await pool.query(
         `SELECT 1 FROM predictions WHERE based_on_image_id = $1 LIMIT 1`,
         [imageId]
@@ -179,74 +314,64 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         continue;
       }
 
+      // 4) Build analytics bundle
       const bundle = await advancedAnalyticsBundle(imageId, {
         lookback: LOOKBACK,
         topk: HOTCOLD_K,
       });
 
+      // 5) Build deterministic baseline prior (OUR prediction first)
+      const baseline_prior = buildBaselinePrior(bundle);
+
       const digit_shuffle = digitShuffleSummary(parsed);
-
-      const instruction = `
-You analyze the Chamet Spin game (results 0..27). Predict the NEXT result using ONLY the provided JSON fields.
-
-Rules:
-- Strong recency weighting: weights.last_20 > last_100 > last_200 > totals.
-- Treat coreStats.* and bundle.* fields as authoritative aggregates (do not recompute).
-- Consider gaps (overdue), streaks (color_runs), ratios, patterns, number_rules (A-D), range_systems, time_buckets, digit_shuffle.
-- Use color_map for color membership.
-- Also consider logs_feedback (recent accuracy, streak type/length, avg confidence) when calibrating risk; if current streak is "wrong", prefer safer/wider distributions.
-- Output strictly the JSON schema below.
-
-Return STRICT JSON with EXACT keys:
-{
-  "predicted_next": <0..27>,
-  "predicted_distribution": { "0": p0, ..., "27": p27 },
-  "top_result": <int>,
-  "top_probability": <float>,
-  "top_candidates": [
-    { "result": n, "prob": p, "color": "..", "parity": "..", "size": ".." }
-  ],
-  "marginals": {
-    "color": { "Red":x, "Orange":y, "Pink":z, "Dark Blue":a, "Sky Blue":b, "Green":c, "Gray":d },
-    "parity": { "odd": x, "even": y },
-    "size":   { "small": a, "big": b },
-    "last_digit": { "0":d0, ..., "9":d9 }
-  },
-  "pattern_detected": true|false,
-  "pattern_type": "<short>",
-  "pattern_description": "<one line>",
-  "confidence": { "entropy": <float>, "calibrated": true|false },
-  "quality_flags": { "sum_ok": true|false },
-  "rationale": "<one line>",
-  "rng_check": { "chi_square": <float>, "p_value": <float|string>, "conclusion": "consistent"|"biased", "notes": "<short>" }
-}`.trim();
-
       const logs_feedback = await predictionLogsSummary({ limit: 200 });
       const logs_tail = await recentPredictionLogsRaw({ limit: 15 });
 
+      // extract recent top guesses (approx): first element from predicted_numbers
+      const recentTop = (logs_tail || [])
+        .map((r) => (Array.isArray(r.predicted_numbers) ? Number(r.predicted_numbers?.[0]) : null))
+        .filter((n) => Number.isFinite(n))
+        .slice(0, 5);
+
+      /** 6) Prompt: ask ONLY for odds_multipliers (bounded) */
+      const instruction = `
+You adjust a BASELINE probability prior over results 0..27 for the Chamet Spin game.
+
+INPUTS:
+- baseline_prior: starting probabilities for each result "0".."27". Treat this as the ground truth base.
+- analytics_bundle: aggregates (windows, gaps, gaps_extended, ratios, color_runs, number_rules A-D, range_systems, time_buckets).
+- latest (parsed image) + digit_shuffle (A/B/C sequence info).
+- logs_feedback + logs_tail (recent performance).
+
+TASK:
+1) Output odds_multipliers for each result 0..27 to modify the baseline_prior. Stay within bounds:
+   0.6 ≤ multiplier ≤ 1.6
+   Use strong evidence only (overdue/gaps, streak breaks, short-window frequency spikes, patterns A-D, daypart effects).
+2) Keep mass reasonably distributed; avoid collapse unless evidence is overwhelming.
+3) Return STRICT JSON:
+{
+  "odds_multipliers": { "0": m0, ..., "27": m27 },
+  "pattern_detected": true|false,
+  "pattern_type": "<short>",
+  "pattern_description": "<one line>",
+  "rationale": "<one line>"
+}`.trim();
+
       const payload = {
-        color_map: COLOR_MAP,
+        baseline_prior,
         bundle,
         latest: parsed,
         digit_shuffle,
         logs_feedback,
         logs_tail,
         schema_hint: {
-          version: 'v8',
+          version: 'v9',
           out_keys: [
-            'predicted_next',
-            'predicted_distribution',
-            'top_result',
-            'top_probability',
-            'top_candidates',
-            'marginals',
+            'odds_multipliers',
             'pattern_detected',
             'pattern_type',
             'pattern_description',
-            'confidence',
-            'quality_flags',
             'rationale',
-            'rng_check',
           ],
         },
       };
@@ -287,53 +412,56 @@ Return STRICT JSON with EXACT keys:
 
       if (!rawText) throw new Error('Empty model output from LLM');
 
-      let prediction;
+      let modelOut;
       try {
-        prediction = JSON.parse(rawText);
+        modelOut = JSON.parse(rawText);
       } catch {
         const m = rawText.match(/\{[\s\S]*\}$/);
-        if (m) prediction = JSON.parse(m[0]);
+        if (m) modelOut = JSON.parse(m[0]);
         else throw new Error(`LLM JSON parse failed: ${rawText}`);
       }
 
-      prediction.predicted_distribution = clampAndNormalizeDistribution(
-        prediction.predicted_distribution || {}
-      );
+      const mults = modelOut?.odds_multipliers || {};
+      let finalDist = combinePrior(baseline_prior, mults, { tau: 1.08, eps: 0.01 });
 
-      const { result: fallbackTop, prob: fallbackProb } = argmaxKeyed(
-        prediction.predicted_distribution
-      );
-
-      if (typeof prediction.predicted_next !== 'number') {
-        prediction.predicted_next = fallbackTop;
-        prediction.top_result = fallbackTop;
-        prediction.top_probability = fallbackProb;
-      } else {
-        prediction.top_result = prediction.top_result ?? fallbackTop;
-        prediction.top_probability = prediction.top_probability ?? fallbackProb;
+      finalDist = penalizeRecent(finalDist, recentTop, 0.1);
+      const H = entropy(finalDist);
+      let { result: topResult, prob: topProb } = argmaxKeyed(finalDist);
+      if (H < 1.9 && topProb < 0.35) {
+        finalDist = combinePrior(finalDist, {}, { tau: 1.12, eps: 0.015 });
+        ({ result: topResult, prob: topProb } = argmaxKeyed(finalDist));
       }
 
-      const sum = Object.values(prediction.predicted_distribution)
-        .map((x) => (Number.isFinite(Number(x)) ? Number(x) : 0))
-        .reduce((a, b) => a + b, 0);
-
-      prediction.quality_flags = {
-        ...(prediction.quality_flags || {}),
-        sum_ok: sum > 0.99 && sum < 1.01,
+      const prediction = {
+        predicted_next: topResult,
+        predicted_distribution: finalDist,
+        top_result: topResult,
+        top_probability: topProb,
+        top_candidates: Object.entries(finalDist)
+          .sort((a, b) => Number(b[1]) - Number(a[1]))
+          .slice(0, 8)
+          .map(([k, p]) => ({
+            result: Number(k),
+            prob: Number(p),
+            color: numToColor(k),
+            parity: parityOf(k),
+            size: sizeOf(k),
+          })),
+        marginals: {},
+        pattern_detected: Boolean(modelOut?.pattern_detected),
+        pattern_type: modelOut?.pattern_type ?? null,
+        pattern_description: modelOut?.pattern_description ?? null,
+        confidence: { entropy: H, calibrated: false },
+        quality_flags: { sum_ok: true },
+        rationale: modelOut?.rationale ?? null,
       };
-
-      // await pool.query(
-      //   `INSERT INTO predictions (based_on_image_id, summary, prediction)
-      //    VALUES ($1, $2::jsonb, $3::jsonb)`,
-      //   [imageId, JSON.stringify(payload.bundle), JSON.stringify(prediction)]
-      // );
 
       const insPred = await pool.query(
         `INSERT INTO predictions (based_on_image_id, summary, prediction)
           VALUES ($1, $2::jsonb, $3::jsonb)
           ON CONFLICT (based_on_image_id) DO NOTHING
           RETURNING id`,
-        [imageId, JSON.stringify(payload.bundle), JSON.stringify(prediction)]
+        [imageId, JSON.stringify(bundle), JSON.stringify(prediction)]
       );
 
       if (!insPred.rows.length) {
@@ -341,38 +469,35 @@ Return STRICT JSON with EXACT keys:
         continue;
       }
 
-      const distEntries = Object.entries(prediction.predicted_distribution || {}).sort(
-        (a, b) => Number(b[1]) - Number(a[1])
-      );
-
-      const predictedNumbers = [];
+      const distEntries = Object.entries(finalDist).sort((a, b) => Number(b[1]) - Number(a[1]));
+      const top3 = [];
       for (const [k] of distEntries) {
         const n = Math.max(0, Math.min(27, Number(k) | 0));
-        if (!predictedNumbers.includes(n)) predictedNumbers.push(n);
-        if (predictedNumbers.length === 3) break;
+        if (!top3.includes(n)) top3.push(n);
+        if (top3.length === 3) break;
       }
 
       await insertPredictionLog({
         basedOnImageId: imageId,
-        predictedNumbers,
-        predictedColor: colorOf(prediction.top_result),
-        predictedParity: parityOf(prediction.top_result),
-        predictedSize: sizeOf(prediction.top_result),
-        confidence: Number(prediction.top_probability),
+        predictedNumbers: top3,
+        predictedColor: numToColor(topResult),
+        predictedParity: parityOf(topResult),
+        predictedSize: sizeOf(topResult),
+        confidence: Number(topProb),
       });
 
       try {
         pushAnalytics('analytics/prediction', {
           based_on_image_id: imageId,
-          top_result: prediction.top_result,
-          top_probability: prediction.top_probability,
-          predicted_next: prediction.predicted_next,
+          top_result: topResult,
+          top_probability: topProb,
+          predicted_next: topResult,
           created_at: new Date().toISOString(),
         });
       } catch {}
 
       logger.log?.(
-        `[Predict] image=${imageId} → next=${prediction.predicted_next} (p=${prediction.top_probability?.toFixed?.(4)})`
+        `[Predict] image=${imageId} → next=${topResult} (p=${Number(topProb).toFixed?.(4)}) H=${H.toFixed?.(3)}`
       );
 
       lastResult = { imageId, parsed, prediction };

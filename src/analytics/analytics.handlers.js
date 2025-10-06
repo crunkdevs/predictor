@@ -16,7 +16,6 @@ export async function getLatestAnchorImageId() {
   return rows[0]?.image_id ?? null;
 }
 
-
 export async function ensureAnchorExists(anchorId) {
   if (!Number.isFinite(anchorId)) return null;
   const { rows } = await pool.query(`SELECT 1 FROM v_spins WHERE image_id = $1 LIMIT 1`, [
@@ -570,25 +569,27 @@ async function _detectPredictionLogCols(pool) {
     FROM information_schema.columns
     WHERE table_name = 'prediction_logs'
   `);
-  const cols = new Set(rows.map(r => r.column_name));
+  const cols = new Set(rows.map((r) => r.column_name));
 
-  const pick = (...names) => names.find(n => cols.has(n)) || null;
+  const pick = (...names) => names.find((n) => cols.has(n)) || null;
 
   const colImage = pick('based_on_image_id', 'image_id');
-  const colPred  = pick('predicted_next', 'predicted', 'prediction', 'predicted_num');
-  const colTop   = pick('top_result', 'actual_result', 'result');
-  const colProb  = pick('top_probability', 'probability', 'confidence');
-  const colTs    = pick('created_at', 'inserted_at', 'createdon');
+  const colPred = pick('predicted_next', 'predicted', 'prediction', 'predicted_num');
+  const colTop = pick('top_result', 'actual_result', 'result');
+  const colProb = pick('top_probability', 'probability', 'confidence');
+  const colTs = pick('created_at', 'inserted_at', 'createdon');
 
   const missing = [];
   if (!colImage) missing.push('based_on_image_id');
-  if (!colPred)  missing.push('predicted_next');
-  if (!colTop)   missing.push('top_result');
-  if (!colProb)  missing.push('top_probability');
-  if (!colTs)    missing.push('created_at');
+  if (!colPred) missing.push('predicted_next');
+  if (!colTop) missing.push('top_result');
+  if (!colProb) missing.push('top_probability');
+  if (!colTs) missing.push('created_at');
   if (missing.length) {
     const have = [...cols].sort().join(', ');
-    throw new Error(`prediction_logs incompatible: missing ${missing.join(', ')}; existing: ${have}`);
+    throw new Error(
+      `prediction_logs incompatible: missing ${missing.join(', ')}; existing: ${have}`
+    );
   }
   return { colImage, colPred, colTop, colProb, colTs };
 }

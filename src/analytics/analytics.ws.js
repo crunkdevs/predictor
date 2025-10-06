@@ -98,7 +98,9 @@ async function getTopicData(topic, params = {}) {
 }
 
 function safeSend(ws, obj) {
-  try { ws.send(JSON.stringify(obj)); } catch { }
+  try {
+    ws.send(JSON.stringify(obj));
+  } catch {}
 }
 
 /** Mount a WS endpoint for analytics only (e.g., /ws/analytics) */
@@ -129,7 +131,11 @@ export function setupAnalyticsWS(httpServer, { path = '/ws/analytics' } = {}) {
     // NEW: handle client requests for specific topics
     ws.on('message', async (raw) => {
       let msg;
-      try { msg = JSON.parse(raw.toString()); } catch { return; }
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
       if (!msg || typeof msg !== 'object') return;
 
       if (msg.type === 'analytics/get' && msg.topic) {
@@ -137,7 +143,11 @@ export function setupAnalyticsWS(httpServer, { path = '/ws/analytics' } = {}) {
           const payload = await getTopicData(msg.topic, msg.params || {});
           safeSend(ws, { type: `analytics/${msg.topic}`, payload, reqId: msg.reqId });
         } catch (e) {
-          safeSend(ws, { type: 'analytics/error', error: e?.message || String(e), reqId: msg.reqId });
+          safeSend(ws, {
+            type: 'analytics/error',
+            error: e?.message || String(e),
+            reqId: msg.reqId,
+          });
         }
       }
 
@@ -147,7 +157,12 @@ export function setupAnalyticsWS(httpServer, { path = '/ws/analytics' } = {}) {
             const payload = await getTopicData(t, (msg.params || {})[t] || {});
             safeSend(ws, { type: `analytics/${t}`, payload, reqId: msg.reqId });
           } catch (e) {
-            safeSend(ws, { type: 'analytics/error', error: e?.message || String(e), topic: t, reqId: msg.reqId });
+            safeSend(ws, {
+              type: 'analytics/error',
+              error: e?.message || String(e),
+              topic: t,
+              reqId: msg.reqId,
+            });
           }
         }
       }
@@ -167,7 +182,8 @@ export function setupAnalyticsWS(httpServer, { path = '/ws/analytics' } = {}) {
 }
 
 export function pushAnalytics(eventType, payload) {
-  for (const ws of CLIENTS) if (ws.readyState === 1) safeSend(ws, { type: eventType, payload, ts: Date.now() });
+  for (const ws of CLIENTS)
+    if (ws.readyState === 1) safeSend(ws, { type: eventType, payload, ts: Date.now() });
 }
 
 export async function pushFreshBundle() {
@@ -181,7 +197,9 @@ export async function pushFreshBundle() {
 }
 
 export async function refreshAndPush() {
-  try { await refreshAnalyticsMaterializedViews(); } catch { }
+  try {
+    await refreshAnalyticsMaterializedViews();
+  } catch {}
   await pushFreshBundle();
 }
 

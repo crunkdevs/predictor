@@ -231,7 +231,7 @@ export async function accuracyBreakdown(req, res) {
 
 export async function predictionsLogSummary(req, res) {
   try {
-    const window = (req.query.window === 'day' ? 'day' : 'hour');
+    const window = req.query.window === 'day' ? 'day' : 'hour';
     const limit = Math.max(1, Math.min(2000, Number(req.query.limit) || 168));
     const rows = await predictionLogsSummary({ window, limit });
     return res.json({ ok: true, rows });
