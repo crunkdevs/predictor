@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { pool } from '../config/db.config.js';
 import { analyzeLatestUnprocessed } from './analyzer.service.js';
+import { refreshAnalyticsMaterializedViews } from '../analytics/analytics.handlers.js';
 
 const TZ = process.env.SCHEDULER_TZ || 'Asia/Karachi';
 
@@ -43,6 +44,7 @@ export function startScheduler(logger = console) {
           logger.log?.('[Scheduler][Diag]', rows?.[0]);
 
           await analyzeLatestUnprocessed(logger);
+          await refreshAnalyticsMaterializedViews();
           logger.log?.('[Scheduler] analyze ✅');
         },
         logger
