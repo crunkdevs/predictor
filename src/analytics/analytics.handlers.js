@@ -450,8 +450,18 @@ export async function advancedAnalyticsBundle(anchorImageId, opts = {}) {
     console.error(e);
   }
 
-  const [windows, coreStats, gaps, gapsExt, ratio, patterns, runs, fourteen] = await Promise.all([
-    windowsSummary(lookback),
+  const lookbacks = Array.isArray(opts.lookback) ? opts.lookback : [opts.lookback];
+  const winset = [
+    ...new Set(
+      lookbacks
+        .map((x) => (typeof x === 'number' ? x : null))
+        .filter((x) => Number.isFinite(x))
+        .concat([20, 100, 200]) // ensure legacy windows exist
+    ),
+  ].filter(Boolean);
+
+  const [winMulti, coreStats, gaps, gapsExt, ratio, patterns, runs, fourteen] = await Promise.all([
+    windowsSummaryMulti(winset),
     allStatsBundle(anchorImageId, lookback, k),
     gapStats(Math.max(lookback, 500)),
     gapStatsExtended(Math.max(lookback, 500)),
@@ -460,6 +470,17 @@ export async function advancedAnalyticsBundle(anchorImageId, opts = {}) {
     recentColorRuns(50),
     buildFourteenSystems(),
   ]);
+
+  const windows = {
+    totals: winMulti.totals,
+    last_20: winMulti.windows_multi['20'] || {},
+    last_100: winMulti.windows_multi['100'] || {},
+    last_200: winMulti.windows_multi['200'] || {},
+    last_200_seq: (winMulti.last_seq_window === 200 ? winMulti.last_seq : undefined) || [],
+    windows_multi: winMulti.windows_multi,
+    last_seq_window: winMulti.last_seq_window,
+    last_seq: winMulti.last_seq,
+  };
 
   const weights = { last_20: 0.5, last_100: 0.3, last_200: 0.15, totals: 0.05 };
 
@@ -607,6 +628,64 @@ export async function recentPredictionLogsRaw({ limit = 25 } = {}) {
     [Math.max(5, Math.min(100, Number(limit) || 25))]
   );
   return rows || [];
+}
+
+// ADD THIS NEW HELPER (below windowsSummary or anywhere in handlers)
+export async function windowsSummaryMulti(winset = [20, 100, 200, 1000]) {
+  // sanitize + sort + unique
+  const wins = [
+    ...new Set(
+      (Array.isArray(winset) ? winset : [20, 100, 200])
+        .map((n) => Number(n))
+        .filter((n) => Number.isFinite(n) && n >= 20 && n <= 5000)
+    ),
+  ].sort((a, b) => a - b);
+
+  const totalsQ = await pool.query(`
+    SELECT result, COUNT(*)::int AS freq
+      FROM v_spins
+     GROUP BY result
+     ORDER BY result
+  `);
+
+  // run all windows in parallel
+  const perWindow = await Promise.all(
+    wins.map(async (W) => {
+      const q = await pool.query(
+        `
+        SELECT result, COUNT(*)::int AS freq
+          FROM (SELECT result FROM v_spins ORDER BY screen_shot_time DESC LIMIT $1) x
+         GROUP BY result
+         ORDER BY result
+      `,
+        [W]
+      );
+      return [W, q.rows];
+    })
+  );
+
+  const maxW = wins[wins.length - 1] || 200;
+  const seqQ = await pool.query(
+    `
+    SELECT result
+      FROM v_spins
+     ORDER BY screen_shot_time DESC
+     LIMIT $1
+  `,
+    [maxW]
+  );
+
+  const mapify = (rows) => Object.fromEntries(rows.map((r) => [String(r.result), Number(r.freq)]));
+
+  const windows_multi = {};
+  for (const [W, rows] of perWindow) windows_multi[String(W)] = mapify(rows);
+
+  return {
+    totals: mapify(totalsQ.rows),
+    windows_multi,
+    last_seq_window: maxW,
+    last_seq: seqQ.rows.map((r) => Number(r.result)).reverse(),
+  };
 }
 
 export async function gapStatsExtended(lookback = 500) {

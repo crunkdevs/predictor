@@ -80,47 +80,52 @@ async function latestPredictionTime() {
  * windows/gaps/gaps_ext/ratios/color_runs/time_buckets ko mila ke 0..27 prior banao
  * Tunables: weights, boosts
  */
+// UPDATE your buildBaselinePrior to read windows.windows_multi when present
 function buildBaselinePrior(bundle, cfg = {}) {
   const {
-    w20 = 0.55,
+    w20 = 0.5,
     w100 = 0.25,
     w200 = 0.1,
+    w1000 = 0.05,
     wtot = 0.1,
-    gapBoost = 0.2, // overdue → up to +20% multiplicative
-    streakBoost = 0.1, // warm→cool ya cool→warm hint
-    colorReweight = 0.1, // color marginals target vs have correction
+    gapBoost = 0.2,
+    streakBoost = 0.1,
+    colorReweight = 0.1,
   } = cfg;
 
   const N = 28;
-  const windows = bundle.windows || {};
+  const W = bundle.windows || {};
+  const WM = W.windows_multi || {};
   const f = (map, i) => Number(map?.[String(i)] || 0);
 
-  // frequency score
+  const freq20 = WM['20'] || W.last_20 || {};
+  const freq100 = WM['100'] || W.last_100 || {};
+  const freq200 = WM['200'] || W.last_200 || {};
+  const freq1000 = WM['1000'] || {};
+  const totals = W.totals || {};
+
   const freq = Array.from(
     { length: N },
     (_, i) =>
-      w20 * f(windows.last_20, i) +
-      w100 * f(windows.last_100, i) +
-      w200 * f(windows.last_200, i) +
-      wtot * f(windows.totals, i)
+      w20 * f(freq20, i) +
+      w100 * f(freq100, i) +
+      w200 * f(freq200, i) +
+      w1000 * f(freq1000, i) +
+      wtot * f(totals, i)
   );
 
-  // normalize to [0..1]
   const maxF = Math.max(...freq, 1);
   let s = freq.map((x) => x / maxF);
 
-  // gaps (since) boost
   const sinceMap = bundle.gaps_extended?.numbers?.since || bundle.gaps?.numbers || {};
   const lookback = Number(bundle.gaps_extended?.lookback || bundle.gaps?.lookback || 500);
-
   for (let i = 0; i < N; i++) {
     const k = String(i);
     const since = Number(sinceMap[k] ?? 0);
-    const r = Math.max(0, Math.min(1, since / lookback)); // 0..1
+    const r = Math.max(0, Math.min(1, since / lookback));
     s[i] *= 1 + gapBoost * r;
   }
 
-  // streak/cluster break hint → target cluster ko nudge
   const breakHint = bundle.color_behaviour?.break_hint;
   if (breakHint) {
     const target = breakHint.includes('cool')
@@ -144,11 +149,9 @@ function buildBaselinePrior(bundle, cfg = {}) {
     }
   }
 
-  // optional: color marginals (agar bundle.ratios mein color share ho)
-  // yahan hum current share vs desired share ka small correction lagate hain
-  const desiredColor = bundle.ratios?.color || null; // { Red: x, ... } in 0..1
+  // optional: color marginals reweight (if available)
+  const desiredColor = bundle.ratios?.color || null;
   if (desiredColor) {
-    // current share calc
     const cur = {};
     for (let i = 0; i < N; i++) {
       const c = numToColor(i);
@@ -165,7 +168,7 @@ function buildBaselinePrior(bundle, cfg = {}) {
     }
   }
 
-  // normalize
+  // normalize to prob
   const Z = s.reduce((a, b) => a + b, 0) || 1;
   const prior = {};
   for (let i = 0; i < N; i++) prior[String(i)] = s[i] / Z;
@@ -316,7 +319,7 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
 
       // 4) Build analytics bundle
       const bundle = await advancedAnalyticsBundle(imageId, {
-        lookback: LOOKBACK,
+        lookback: [200, 1000, 2000],
         topk: HOTCOLD_K,
       });
 
