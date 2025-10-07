@@ -75,27 +75,21 @@ async function latestPredictionTime() {
   return rows[0]?.created_at ? new Date(rows[0].created_at) : null;
 }
 
-/** ==== NEW: BASELINE PRIOR (100% tumhara data use) ==== */
-/**
- * windows/gaps/gaps_ext/ratios/color_runs/time_buckets ko mila ke 0..27 prior banao
- * Tunables: weights, boosts
- */
 function buildBaselinePrior(bundle, cfg = {}) {
   const {
     w20 = 0.55,
     w100 = 0.25,
     w200 = 0.1,
     wtot = 0.1,
-    gapBoost = 0.3, // was 0.2
-    streakBoost = 0.25,
-    colorReweight = 0.1,
+    gapBoost = 0.3,
+    streakBoost = 0.12,
+    colorReweight = 0.0,
   } = cfg;
 
   const N = 28;
   const windows = bundle.windows || {};
   const f = (map, i) => Number(map?.[String(i)] || 0);
 
-  // frequency score
   const freq = Array.from(
     { length: N },
     (_, i) =>
@@ -105,11 +99,9 @@ function buildBaselinePrior(bundle, cfg = {}) {
       wtot * f(windows.totals, i)
   );
 
-  // normalize to [0..1]
   const maxF = Math.max(...freq, 1);
   let s = freq.map((x) => x / maxF);
 
-  // gaps (since) boost
   const sinceMap = bundle.gaps_extended?.numbers?.since || bundle.gaps?.numbers || {};
   const lookback = Number(bundle.gaps_extended?.lookback || bundle.gaps?.lookback || 500);
 
@@ -121,7 +113,6 @@ function buildBaselinePrior(bundle, cfg = {}) {
     s[i] *= 1 + gapBoost * r;
   }
 
-  // streak/cluster break hint → target cluster ko nudge
   const breakHint = bundle.color_behaviour?.break_hint;
   if (breakHint) {
     const target = breakHint.includes('cool')
@@ -145,22 +136,17 @@ function buildBaselinePrior(bundle, cfg = {}) {
     }
   }
 
-  // optional: color marginals (agar bundle.ratios mein color share ho)
-  // yahan hum current share vs desired share ka small correction lagate hain
-  // ---- Color marginals from time_buckets (short window) OR coreStats (lookback window)
   const shortWin = bundle.time_buckets?.last_10m || null;
-  // NOTE: coreStats.color.colors = counts, colors_pct = %
+
   const longWin = bundle.coreStats?.color?.colors || bundle.coreStats?.color?.colors_pct || null;
 
   const targetColorShare = {};
   if (shortWin && Object.keys(shortWin).length) {
-    // short window heavy colors ko down-weight target banayein
     const t = Object.values(shortWin).reduce((a, b) => a + Number(b || 0), 0) || 1;
     for (const [c, v] of Object.entries(shortWin)) {
       targetColorShare[c] = Math.max(0, 1 - Number(v) / t);
     }
   } else if (longWin) {
-    // long window pe halki inversion (heavy colors -> less target)
     const t = Object.values(longWin).reduce((a, b) => a + Number(b || 0), 0) || 1;
     for (const [c, v] of Object.entries(longWin)) {
       const share = Number(v) / t;
@@ -168,7 +154,7 @@ function buildBaselinePrior(bundle, cfg = {}) {
     }
   }
 
-  if (Object.keys(targetColorShare).length) {
+  if (colorReweight > 0 && Object.keys(targetColorShare).length) {
     const cur = {};
     for (let i = 0; i < N; i++) {
       const c = numToColor(i);
@@ -180,20 +166,18 @@ function buildBaselinePrior(bundle, cfg = {}) {
       if (!c) continue;
       const have = (cur[c] || 0) / totalS;
       const want = Number(targetColorShare[c] || 0);
-      const delta = 0.18 * (want - (1 - have)); // strength
+      const delta = colorReweight * (want - (1 - have));
       s[i] *= Math.max(1e-9, 1 + delta);
     }
   }
 
-  // normalize
   const Z = s.reduce((a, b) => a + b, 0) || 1;
   const prior = {};
   for (let i = 0; i < N; i++) prior[String(i)] = s[i] / Z;
   return prior;
 }
 
-/** ==== NEW: LLM combination helpers ==== */
-function combinePrior(prior, mults, { tau = 1.05, eps = 0.01 } = {}) {
+function combinePrior(prior, mults, { tau = 1.12, eps = 0.03 } = {}) {
   const out = {};
   let Z = 0;
   for (let i = 0; i <= 27; i++) {
@@ -201,14 +185,14 @@ function combinePrior(prior, mults, { tau = 1.05, eps = 0.01 } = {}) {
     const p = Math.max(1e-12, Number(prior[k] || 0));
     let m = Number(mults?.[k]);
     if (!Number.isFinite(m)) m = 1.0;
-    m = Math.max(0.55, Math.min(1.7, m)); // widened bounds
-    out[k] = Math.pow(p * m, 1 / tau);
+    m = Math.max(0.7, Math.min(1.45, m));
+    out[k] = Math.pow(p * m, 1 / (tau ?? 1.12));
     Z += out[k];
   }
   const u = 1 / 28;
   for (let i = 0; i <= 27; i++) {
     const k = String(i);
-    out[k] = (1 - eps) * (out[k] / Z) + eps * u;
+    out[k] = (1 - (eps ?? 0.03)) * (out[k] / Z) + (eps ?? 0.03) * u;
   }
   return out;
 }
@@ -222,7 +206,6 @@ function entropy(dist) {
   return H;
 }
 
-// anti-repeat: recent top results ko halka penalize
 function penalizeRecent(dist, recentTop = [], alpha = 0.1) {
   const tmp = {};
   let Z = 0;
@@ -243,7 +226,6 @@ function penalizeRecent(dist, recentTop = [], alpha = 0.1) {
   return out;
 }
 
-/** ==== DIGIT SHUFFLE (as-is from your version) ==== */
 function digitShuffleSummary(latest) {
   const out = { category: null, sum_0_27: null, color: null, digits: [] };
   const d = (Array.isArray(latest?.numbers) ? latest.numbers : []).map((n) => Number(n));
@@ -268,7 +250,6 @@ function digitShuffleSummary(latest) {
   return out;
 }
 
-/** ================== MAIN LOOP (HYBRID PRIOR + LLM MULTIPLIERS) ================== */
 export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
   logger.log?.('[PRED CFG]', {
     MODEL,
@@ -301,7 +282,6 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         }
       }
 
-      // 1) Parse image → stats row
       let parsed;
       try {
         parsed = await parseGameScreenshot(imageId);
@@ -311,7 +291,6 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
       }
       await insertImageStats({ imageId, numbers: parsed?.numbers, result: parsed?.result });
 
-      // 2) Complete last pending log with actual
       try {
         const actualNumber = Number(parsed?.result);
         if (Number.isFinite(actualNumber)) {
@@ -326,7 +305,6 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         logger.error?.('[Analyzer] completeLatestPendingWithActual failed:', e?.message || e);
       }
 
-      // 3) Skip if prediction already exists for this image
       const { rows: predCheck } = await pool.query(
         `SELECT 1 FROM predictions WHERE based_on_image_id = $1 LIMIT 1`,
         [imageId]
@@ -338,22 +316,17 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         continue;
       }
 
-      // 4) Build analytics bundle
       const bundle = await advancedAnalyticsBundle(imageId, {
         lookback: LOOKBACK,
         topk: HOTCOLD_K,
       });
 
-      // 5) Build deterministic baseline prior (OUR prediction first)
       const baseline_prior = buildBaselinePrior(bundle);
 
       const digit_shuffle = digitShuffleSummary(parsed);
       const logs_feedback = await predictionLogsSummary({ limit: 200 });
       const logs_tail = await recentPredictionLogsRaw({ limit: 15 });
 
-      // extract recent top guesses (approx): first element from predicted_numbers
-
-      /** 6) Prompt: ask ONLY for odds_multipliers (bounded) */
       const instruction = `
 You adjust a BASELINE probability prior over results 0..27 for the Chamet Spin game.
 
@@ -445,17 +418,17 @@ TASK:
       let finalDist = combinePrior(baseline_prior, mults, { tau: 1.08, eps: 0.01 });
 
       const recentActual = (bundle.windows?.last_200_seq || []).slice(-10).reverse();
-      finalDist = penalizeRecent(finalDist, recentActual, 0.18);
+      finalDist = penalizeRecent(finalDist, recentActual, 0.1);
 
       const recentPredictedTop = (logs_tail || [])
         .map((r) => (Array.isArray(r.predicted_numbers) ? Number(r.predicted_numbers?.[0]) : null))
         .filter((n) => Number.isFinite(n))
         .slice(0, 8);
 
-      finalDist = penalizeRecent(finalDist, recentPredictedTop, 0.12);
+      finalDist = penalizeRecent(finalDist, recentPredictedTop, 0.06);
       const H = entropy(finalDist);
       let { result: topResult, prob: topProb } = argmaxKeyed(finalDist);
-      if (H < 2.1 || topProb > 0.38) {
+      if (H < 2.3 || topProb > 0.34) {
         finalDist = combinePrior(finalDist, {}, { tau: 1.18, eps: 0.03 });
         ({ result: topResult, prob: topProb } = argmaxKeyed(finalDist));
       }

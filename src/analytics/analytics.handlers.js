@@ -527,16 +527,10 @@ export async function advancedAnalyticsBundle(anchorImageId, opts = {}) {
   const rawLB = opts.lookback ?? process.env.PRED_LOOKBACK ?? 200;
   const k = Number(opts.topk || process.env.PRED_TOPK || 5);
 
-  try {
-    await refreshAnalyticsMaterializedViews();
-  } catch (e) {
-    console.error(e);
-  }
-
   const LB = await resolveLookback(anchorImageId, rawLB);
 
   const [windows, coreStats, gaps, gapsExt, ratio, patterns, runs, fourteen] = await Promise.all([
-    windowsSummaryAnchor(anchorImageId, LB), // strictly before anchor
+    windowsSummaryAnchor(anchorImageId, LB),
     allStatsBundle(anchorImageId, LB, k),
     gapStats(Math.max(LB, 500)),
     gapStatsExtended(Math.max(LB, 500)),
@@ -713,7 +707,6 @@ export async function gapStatsExtended(lookback = 500) {
   return j;
 }
 
-// === NEW HELPERS (anchor-aware + support for "all") ===
 async function resolveLookback(anchorId, lookback) {
   if (String(lookback).toLowerCase?.() !== 'all') {
     return sanitizeLookback(lookback);

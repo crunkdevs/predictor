@@ -83,7 +83,7 @@ async function getTopicData(topic, params = {}) {
     }
     case 'fourteen': {
       const data = await buildFourteenSystems();
-      return data; // { number_rules, range_systems, color_behaviour, time_buckets }
+      return data;
     }
     case 'bundle': {
       const anchor = await getLatestAnchorImageId();
@@ -103,7 +103,6 @@ function safeSend(ws, obj) {
   } catch {}
 }
 
-/** Mount a WS endpoint for analytics only (e.g., /ws/analytics) */
 export function setupAnalyticsWS(httpServer, { path = '/ws/analytics' } = {}) {
   wss = new WebSocketServer({ noServer: true });
 
@@ -119,7 +118,6 @@ export function setupAnalyticsWS(httpServer, { path = '/ws/analytics' } = {}) {
     ws.on('close', () => CLIENTS.delete(ws));
     safeSend(ws, { type: 'analytics/hello', ts: Date.now() });
 
-    // (optional) still push an initial bundle so UI has something immediately
     try {
       const anchor = await getLatestAnchorImageId();
       const bundle = await advancedAnalyticsBundle(anchor, {});
@@ -128,7 +126,6 @@ export function setupAnalyticsWS(httpServer, { path = '/ws/analytics' } = {}) {
       safeSend(ws, { type: 'analytics/error', error: e?.message || String(e) });
     }
 
-    // NEW: handle client requests for specific topics
     ws.on('message', async (raw) => {
       let msg;
       try {
@@ -169,7 +166,6 @@ export function setupAnalyticsWS(httpServer, { path = '/ws/analytics' } = {}) {
     });
   });
 
-  // heartbeat (optional)
   const iv = setInterval(() => {
     for (const ws of CLIENTS) {
       if (ws.readyState === 1) safeSend(ws, { type: 'ping', ts: Date.now() });
