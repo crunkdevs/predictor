@@ -71,15 +71,95 @@ export async function hotCold(anchorId, lookback, k = 5) {
   return nn(rows[0]?.stats);
 }
 
-export async function allStatsBundle(anchorId, lookback, k = 5) {
-  lookback = sanitizeLookback(lookback);
-  k = sanitizeK(k);
+async function windowsSummaryAnchor(anchorId, limitSeq = 200) {
+  if (!Number.isFinite(anchorId))
+    return { totals: {}, last_200: {}, last_100: {}, last_20: {}, last_200_seq: [] };
 
+  const { rows: a } = await pool.query(`SELECT fn_anchor_time($1) AS t`, [anchorId]);
+  const t_anchor = a[0]?.t;
+  if (!t_anchor) return { totals: {}, last_200: {}, last_100: {}, last_20: {}, last_200_seq: [] };
+
+  const totalsQ = await pool.query(
+    `
+    SELECT result, COUNT(*)::int AS freq
+      FROM v_spins
+     WHERE screen_shot_time < $1
+     GROUP BY result
+     ORDER BY result
+    `,
+    [t_anchor]
+  );
+
+  const last200Q = await pool.query(
+    `
+    SELECT result, COUNT(*)::int AS freq
+      FROM (
+        SELECT result FROM v_spins
+         WHERE screen_shot_time < $1
+         ORDER BY screen_shot_time DESC
+         LIMIT 200
+      ) x
+     GROUP BY result
+    `,
+    [t_anchor]
+  );
+
+  const last100Q = await pool.query(
+    `
+    SELECT result, COUNT(*)::int AS freq
+      FROM (
+        SELECT result FROM v_spins
+         WHERE screen_shot_time < $1
+         ORDER BY screen_shot_time DESC
+         LIMIT 100
+      ) x
+     GROUP BY result
+    `,
+    [t_anchor]
+  );
+
+  const last20Q = await pool.query(
+    `
+    SELECT result, COUNT(*)::int AS freq
+      FROM (
+        SELECT result FROM v_spins
+         WHERE screen_shot_time < $1
+         ORDER BY screen_shot_time DESC
+         LIMIT 20
+      ) x
+     GROUP BY result
+    `,
+    [t_anchor]
+  );
+
+  const seqQ = await pool.query(
+    `
+    SELECT result
+      FROM v_spins
+     WHERE screen_shot_time < $1
+     ORDER BY screen_shot_time DESC
+     LIMIT $2
+    `,
+    [t_anchor, isPosInt(limitSeq) ? limitSeq : 200]
+  );
+
+  const mapify = (rows) => Object.fromEntries(rows.map((r) => [String(r.result), Number(r.freq)]));
+
+  return {
+    totals: mapify(totalsQ.rows),
+    last_200: mapify(last200Q.rows),
+    last_100: mapify(last100Q.rows),
+    last_20: mapify(last20Q.rows),
+    last_200_seq: seqQ.rows.map((r) => Number(r.result)).reverse(),
+  };
+}
+
+export async function allStatsBundle(anchorId, lookback, k = 5) {
   const verifiedAnchor = await ensureAnchorExists(anchorId);
   if (verifiedAnchor == null) {
     return {
       anchor_image_id: null,
-      lookback,
+      lookback: sanitizeLookback(lookback),
       color: {},
       parity: {},
       size_parity: {},
@@ -88,17 +168,20 @@ export async function allStatsBundle(anchorId, lookback, k = 5) {
     };
   }
 
+  const LB = await resolveLookback(verifiedAnchor, lookback);
+  k = sanitizeK(k);
+
   const [color, parity, sizeParity, lastDigit, hotcold] = await Promise.all([
-    colorFreq(verifiedAnchor, lookback),
-    parityFreq(verifiedAnchor, lookback),
-    sizeParityFreq(verifiedAnchor, lookback),
-    lastDigitFreq(verifiedAnchor, lookback),
-    hotCold(verifiedAnchor, lookback, k),
+    colorFreq(verifiedAnchor, LB),
+    parityFreq(verifiedAnchor, LB),
+    sizeParityFreq(verifiedAnchor, LB),
+    lastDigitFreq(verifiedAnchor, LB),
+    hotCold(verifiedAnchor, LB, k),
   ]);
 
   return {
     anchor_image_id: verifiedAnchor,
-    lookback,
+    lookback: LB,
     color,
     parity,
     size_parity: sizeParity,
@@ -441,7 +524,7 @@ export async function refreshAnalyticsMaterializedViews() {
 }
 
 export async function advancedAnalyticsBundle(anchorImageId, opts = {}) {
-  const lookback = Number(opts.lookback || process.env.PRED_LOOKBACK || 200);
+  const rawLB = opts.lookback ?? process.env.PRED_LOOKBACK ?? 200;
   const k = Number(opts.topk || process.env.PRED_TOPK || 5);
 
   try {
@@ -450,13 +533,15 @@ export async function advancedAnalyticsBundle(anchorImageId, opts = {}) {
     console.error(e);
   }
 
+  const LB = await resolveLookback(anchorImageId, rawLB);
+
   const [windows, coreStats, gaps, gapsExt, ratio, patterns, runs, fourteen] = await Promise.all([
-    windowsSummary(lookback),
-    allStatsBundle(anchorImageId, lookback, k),
-    gapStats(Math.max(lookback, 500)),
-    gapStatsExtended(Math.max(lookback, 500)),
-    ratios(Math.min(lookback, 200)),
-    numberPatterns(lookback),
+    windowsSummaryAnchor(anchorImageId, LB), // strictly before anchor
+    allStatsBundle(anchorImageId, LB, k),
+    gapStats(Math.max(LB, 500)),
+    gapStatsExtended(Math.max(LB, 500)),
+    ratios(Math.min(LB, 200)),
+    numberPatterns(LB),
     recentColorRuns(50),
     buildFourteenSystems(),
   ]);
@@ -464,7 +549,7 @@ export async function advancedAnalyticsBundle(anchorImageId, opts = {}) {
   const weights = { last_20: 0.5, last_100: 0.3, last_200: 0.15, totals: 0.05 };
 
   return {
-    lookback,
+    lookback: LB,
     topk: k,
     weights,
     windows,
@@ -626,6 +711,18 @@ export async function gapStatsExtended(lookback = 500) {
   }
   j.unseen_policy = 'null_means_unseen';
   return j;
+}
+
+// === NEW HELPERS (anchor-aware + support for "all") ===
+async function resolveLookback(anchorId, lookback) {
+  if (String(lookback).toLowerCase?.() !== 'all') {
+    return sanitizeLookback(lookback);
+  }
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM v_spins WHERE screen_shot_time < fn_anchor_time($1)`,
+    [anchorId]
+  );
+  return Math.max(1, Number(rows[0]?.c || 1));
 }
 
 export default {
