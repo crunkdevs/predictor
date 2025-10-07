@@ -87,7 +87,7 @@ function buildBaselinePrior(bundle, cfg = {}) {
     w200 = 0.1,
     wtot = 0.1,
     gapBoost = 0.3, // was 0.2
-    streakBoost = 0.18, // was 0.1
+    streakBoost = 0.25,
     colorReweight = 0.1,
   } = cfg;
 
@@ -147,9 +147,28 @@ function buildBaselinePrior(bundle, cfg = {}) {
 
   // optional: color marginals (agar bundle.ratios mein color share ho)
   // yahan hum current share vs desired share ka small correction lagate hain
-  const desiredColor = bundle.ratios?.color || null; // { Red: x, ... } in 0..1
-  if (desiredColor) {
-    // current share calc
+  // ---- Color marginals from time_buckets (short window) OR coreStats (lookback window)
+  const shortWin = bundle.time_buckets?.last_10m || null;
+  // NOTE: coreStats.color.colors = counts, colors_pct = %
+  const longWin = bundle.coreStats?.color?.colors || bundle.coreStats?.color?.colors_pct || null;
+
+  const targetColorShare = {};
+  if (shortWin && Object.keys(shortWin).length) {
+    // short window heavy colors ko down-weight target banayein
+    const t = Object.values(shortWin).reduce((a, b) => a + Number(b || 0), 0) || 1;
+    for (const [c, v] of Object.entries(shortWin)) {
+      targetColorShare[c] = Math.max(0, 1 - Number(v) / t);
+    }
+  } else if (longWin) {
+    // long window pe halki inversion (heavy colors -> less target)
+    const t = Object.values(longWin).reduce((a, b) => a + Number(b || 0), 0) || 1;
+    for (const [c, v] of Object.entries(longWin)) {
+      const share = Number(v) / t;
+      targetColorShare[c] = Math.max(0, 1 - share);
+    }
+  }
+
+  if (Object.keys(targetColorShare).length) {
     const cur = {};
     for (let i = 0; i < N; i++) {
       const c = numToColor(i);
@@ -159,9 +178,9 @@ function buildBaselinePrior(bundle, cfg = {}) {
     for (let i = 0; i < N; i++) {
       const c = numToColor(i);
       if (!c) continue;
-      const target = Number(desiredColor[c] || 0);
       const have = (cur[c] || 0) / totalS;
-      const delta = colorReweight * (target - have);
+      const want = Number(targetColorShare[c] || 0);
+      const delta = 0.18 * (want - (1 - have)); // strength
       s[i] *= Math.max(1e-9, 1 + delta);
     }
   }
@@ -251,7 +270,13 @@ function digitShuffleSummary(latest) {
 
 /** ================== MAIN LOOP (HYBRID PRIOR + LLM MULTIPLIERS) ================== */
 export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
-  logger.log?.('[PRED CFG]', { MODEL, TEMP, LOOKBACK, HOTCOLD_K, PRED_MIN_SECONDS });
+  logger.log?.('[PRED CFG]', {
+    MODEL,
+    TEMP,
+    LOOKBACK: Number(LOOKBACK),
+    HOTCOLD_K,
+    PRED_MIN_SECONDS,
+  });
 
   const ids = await latestUnprocessedImages(limit);
   if (!ids.length) {
@@ -419,12 +444,19 @@ TASK:
       const mults = modelOut?.odds_multipliers || {};
       let finalDist = combinePrior(baseline_prior, mults, { tau: 1.08, eps: 0.01 });
 
-      const recentActual = (bundle.windows?.last_200_seq || []).slice(-5).reverse();
-      finalDist = penalizeRecent(finalDist, recentActual, 0.08);
+      const recentActual = (bundle.windows?.last_200_seq || []).slice(-10).reverse();
+      finalDist = penalizeRecent(finalDist, recentActual, 0.18);
+
+      const recentPredictedTop = (logs_tail || [])
+        .map((r) => (Array.isArray(r.predicted_numbers) ? Number(r.predicted_numbers?.[0]) : null))
+        .filter((n) => Number.isFinite(n))
+        .slice(0, 8);
+
+      finalDist = penalizeRecent(finalDist, recentPredictedTop, 0.12);
       const H = entropy(finalDist);
       let { result: topResult, prob: topProb } = argmaxKeyed(finalDist);
-      if (H < 1.9 && topProb < 0.35) {
-        finalDist = combinePrior(finalDist, {}, { tau: 1.12, eps: 0.015 });
+      if (H < 2.1 || topProb > 0.38) {
+        finalDist = combinePrior(finalDist, {}, { tau: 1.18, eps: 0.03 });
         ({ result: topResult, prob: topProb } = argmaxKeyed(finalDist));
       }
 
