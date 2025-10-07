@@ -280,7 +280,6 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         }
       }
 
-      // 1) Parse image → stats row
       let parsed;
       try {
         parsed = await parseGameScreenshot(imageId);
@@ -290,12 +289,12 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
       }
       const resultNum = Number(parsed?.result);
       if (!Number.isFinite(resultNum)) {
-        logger.warn?.(`[Analyzer] invalid result for image=${imageId}:`, parsed?.result);
+        logger.warn?.(`[Analyzer] Skipping image=${imageId} — invalid result:`, parsed?.result);
         continue;
       }
+
       await insertImageStats({ imageId, numbers: parsed?.numbers, result: resultNum });
 
-      // 2) Complete last pending log with actual
       try {
         const actualNumber = Number(parsed?.result);
         if (Number.isFinite(actualNumber)) {
@@ -478,12 +477,17 @@ TASK:
       }
 
       const distEntries = Object.entries(finalDist).sort((a, b) => Number(b[1]) - Number(a[1]));
-      const top3 = [];
+      let top3 = [];
       for (const [k] of distEntries) {
         const n = Math.max(0, Math.min(27, Number(k) | 0));
         if (!top3.includes(n)) top3.push(n);
         if (top3.length === 3) break;
       }
+
+      if (!Number.isFinite(topProb)) topProb = 0;
+      if (!Number.isFinite(topResult)) topResult = 0;
+      if (!Array.isArray(top3)) top3 = [];
+      top3 = top3.map((n) => (Number.isFinite(n) ? n : 0));
 
       await insertPredictionLog({
         basedOnImageId: imageId,
