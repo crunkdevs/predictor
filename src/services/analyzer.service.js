@@ -288,7 +288,12 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         logger.error?.(`[Analyzer] image=${imageId} parse failed, skipping: ${e?.message || e}`);
         continue;
       }
-      await insertImageStats({ imageId, numbers: parsed?.numbers, result: parsed?.result });
+      const resultNum = Number(parsed?.result);
+      if (!Number.isFinite(resultNum)) {
+        logger.warn?.(`[Analyzer] invalid result for image=${imageId}:`, parsed?.result);
+        continue;
+      }
+      await insertImageStats({ imageId, numbers: parsed?.numbers, result: resultNum });
 
       // 2) Complete last pending log with actual
       try {
