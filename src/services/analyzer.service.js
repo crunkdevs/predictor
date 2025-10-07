@@ -23,7 +23,7 @@ import { pushAnalytics } from '../analytics/analytics.ws.js';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const LOOKBACK = Number(process.env.PRED_LOOKBACK || 200);
+const LOOKBACK = process.env.PRED_LOOKBACK ?? '200';
 const HOTCOLD_K = Number(process.env.PRED_TOPK || 5);
 const MODEL = process.env.PRED_MODEL || 'gpt-4.1-mini';
 const IS_GPT5 = (MODEL || '').toLowerCase().startsWith('gpt-5');
@@ -86,9 +86,9 @@ function buildBaselinePrior(bundle, cfg = {}) {
     w100 = 0.25,
     w200 = 0.1,
     wtot = 0.1,
-    gapBoost = 0.2, // overdue → up to +20% multiplicative
-    streakBoost = 0.1, // warm→cool ya cool→warm hint
-    colorReweight = 0.1, // color marginals target vs have correction
+    gapBoost = 0.3, // was 0.2
+    streakBoost = 0.18, // was 0.1
+    colorReweight = 0.1,
   } = cfg;
 
   const N = 28;
@@ -115,8 +115,9 @@ function buildBaselinePrior(bundle, cfg = {}) {
 
   for (let i = 0; i < N; i++) {
     const k = String(i);
-    const since = Number(sinceMap[k] ?? 0);
-    const r = Math.max(0, Math.min(1, since / lookback)); // 0..1
+    const raw = sinceMap[k];
+    const since = raw == null ? lookback + 1 : Number(raw);
+    const r = Math.max(0, Math.min(1, since / lookback));
     s[i] *= 1 + gapBoost * r;
   }
 
@@ -174,7 +175,6 @@ function buildBaselinePrior(bundle, cfg = {}) {
 
 /** ==== NEW: LLM combination helpers ==== */
 function combinePrior(prior, mults, { tau = 1.05, eps = 0.01 } = {}) {
-  // multiplier bounds: 0.6..1.6 (hard guardrails)
   const out = {};
   let Z = 0;
   for (let i = 0; i <= 27; i++) {
@@ -182,11 +182,10 @@ function combinePrior(prior, mults, { tau = 1.05, eps = 0.01 } = {}) {
     const p = Math.max(1e-12, Number(prior[k] || 0));
     let m = Number(mults?.[k]);
     if (!Number.isFinite(m)) m = 1.0;
-    m = Math.max(0.6, Math.min(1.6, m));
+    m = Math.max(0.55, Math.min(1.7, m)); // widened bounds
     out[k] = Math.pow(p * m, 1 / tau);
     Z += out[k];
   }
-  // epsilon exploration → avoid collapse
   const u = 1 / 28;
   for (let i = 0; i <= 27; i++) {
     const k = String(i);
@@ -328,10 +327,6 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
       const logs_tail = await recentPredictionLogsRaw({ limit: 15 });
 
       // extract recent top guesses (approx): first element from predicted_numbers
-      const recentTop = (logs_tail || [])
-        .map((r) => (Array.isArray(r.predicted_numbers) ? Number(r.predicted_numbers?.[0]) : null))
-        .filter((n) => Number.isFinite(n))
-        .slice(0, 5);
 
       /** 6) Prompt: ask ONLY for odds_multipliers (bounded) */
       const instruction = `
@@ -345,7 +340,7 @@ INPUTS:
 
 TASK:
 1) Output odds_multipliers for each result 0..27 to modify the baseline_prior. Stay within bounds:
-   0.6 ≤ multiplier ≤ 1.6
+   0.55 ≤ multiplier ≤ 1.7
    Use strong evidence only (overdue/gaps, streak breaks, short-window frequency spikes, patterns A-D, daypart effects).
 2) Keep mass reasonably distributed; avoid collapse unless evidence is overwhelming.
 3) Return STRICT JSON:
@@ -424,7 +419,8 @@ TASK:
       const mults = modelOut?.odds_multipliers || {};
       let finalDist = combinePrior(baseline_prior, mults, { tau: 1.08, eps: 0.01 });
 
-      finalDist = penalizeRecent(finalDist, recentTop, 0.1);
+      const recentActual = (bundle.windows?.last_200_seq || []).slice(-5).reverse();
+      finalDist = penalizeRecent(finalDist, recentActual, 0.08);
       const H = entropy(finalDist);
       let { result: topResult, prob: topProb } = argmaxKeyed(finalDist);
       if (H < 1.9 && topProb < 0.35) {
