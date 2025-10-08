@@ -711,11 +711,28 @@ async function resolveLookback(anchorId, lookback) {
   if (String(lookback).toLowerCase?.() !== 'all') {
     return sanitizeLookback(lookback);
   }
+
   const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS c FROM v_spins WHERE screen_shot_time < fn_anchor_time($1)`,
+    `
+    WITH t_anchor AS (
+      SELECT fn_anchor_time($1) AS t
+    )
+    SELECT
+      LEAST(
+        (SELECT COUNT(*)::int FROM v_spins, t_anchor WHERE screen_shot_time < t_anchor.t),
+        1200
+      ) AS by_count,
+      (SELECT COUNT(*)::int
+         FROM v_spins, t_anchor
+        WHERE screen_shot_time >= (t_anchor.t - interval '24 hours')
+          AND screen_shot_time <  t_anchor.t
+      ) AS last_24h
+    `,
     [anchorId]
   );
-  return Math.max(1, Number(rows[0]?.c || 1));
+  const byCount = Number(rows?.[0]?.by_count || 1);
+  const last24 = Number(rows?.[0]?.last_24h || 1);
+  return Math.max(1, Math.min(1200, Math.max(byCount, last24)));
 }
 
 export default {

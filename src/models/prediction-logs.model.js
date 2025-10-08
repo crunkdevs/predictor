@@ -58,15 +58,19 @@ export async function completeLatestPendingWithActual({
   actualColor,
   actualParity,
   actualSize,
+  currentImageId,
 }) {
   const sel = await pool.query(
     `
     SELECT id
-      FROM prediction_logs
-     WHERE actual_result IS NULL
-     ORDER BY created_at DESC
-     LIMIT 1
-    `
+    FROM prediction_logs
+    WHERE actual_result IS NULL
+      AND based_on_image_id IS NOT NULL
+      AND based_on_image_id < $1
+    ORDER BY based_on_image_id DESC, id DESC
+    LIMIT 1
+    `,
+    [Number(currentImageId)]
   );
   const id = sel.rows?.[0]?.id ?? null;
   if (!id) return null;

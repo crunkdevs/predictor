@@ -45,6 +45,7 @@ export function startScheduler(logger = console) {
 
           await analyzeLatestUnprocessed(logger);
           await refreshAnalyticsMaterializedViews();
+          await pool.query('SELECT fn_rule_weights_maintenance(6)');
           logger.log?.('[Scheduler] analyze ✅');
         },
         logger

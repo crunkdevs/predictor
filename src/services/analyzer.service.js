@@ -76,20 +76,53 @@ async function latestPredictionTime() {
 }
 
 function buildBaselinePrior(bundle, cfg = {}) {
-  const {
-    w20 = 0.55,
-    w100 = 0.25,
-    w200 = 0.1,
-    wtot = 0.1,
-    gapBoost = 0.3, // was 0.2
-    streakBoost = 0.25,
-  } = cfg;
+  const { accuracy_pct = null, streak = null, volatility = null } = cfg.signals || {};
+
+  let w20 = 0.55;
+  let w100 = 0.25;
+  let w200 = 0.1;
+  let wtot = 0.1;
+
+  let gapBoost = 0.28;
+  let streakBoost = 0.1;
+  let colorReweight = 0.0;
+
+  if (typeof accuracy_pct === 'number' && accuracy_pct < 45) {
+    w20 = 0.6;
+    w100 = 0.25;
+    w200 = 0.08;
+    wtot = 0.07;
+    gapBoost = 0.34;
+    streakBoost = 0.12;
+    colorReweight = 0.12;
+  }
+
+  if (streak?.type === 'wrong' && streak.length >= 3) {
+    w20 += 0.05;
+    gapBoost += 0.06;
+    streakBoost += 0.03;
+    colorReweight = Math.max(colorReweight, 0.12);
+  }
+
+  if (
+    typeof accuracy_pct === 'number' &&
+    accuracy_pct > 58 &&
+    streak?.type === 'correct' &&
+    streak.length >= 3
+  ) {
+    gapBoost = Math.max(0.18, gapBoost - 0.08);
+    streakBoost = Math.max(0.06, streakBoost - 0.04);
+    colorReweight = 0.0;
+  }
+
+  if (typeof volatility === 'number' && volatility > 0.6) {
+    colorReweight = Math.max(colorReweight, 0.15);
+  }
 
   const N = 28;
   const windows = bundle.windows || {};
   const f = (map, i) => Number(map?.[String(i)] || 0);
 
-  // frequency score
   const freq = Array.from(
     { length: N },
     (_, i) =>
@@ -99,7 +132,6 @@ function buildBaselinePrior(bundle, cfg = {}) {
       wtot * f(windows.totals, i)
   );
 
-  // normalize to [0..1]
   const maxF = Math.max(...freq, 1);
   let s = freq.map((x) => x / maxF);
 
@@ -154,7 +186,7 @@ function buildBaselinePrior(bundle, cfg = {}) {
     }
   }
 
-  if (Object.keys(targetColorShare).length) {
+  if (colorReweight > 0 && Object.keys(targetColorShare).length) {
     const cur = {};
     for (let i = 0; i < N; i++) {
       const c = numToColor(i);
@@ -166,7 +198,7 @@ function buildBaselinePrior(bundle, cfg = {}) {
       if (!c) continue;
       const have = (cur[c] || 0) / totalS;
       const want = Number(targetColorShare[c] || 0);
-      const delta = 0.18 * (want - (1 - have)); // strength
+      const delta = colorReweight * (want - (1 - have));
       s[i] *= Math.max(1e-9, 1 + delta);
     }
   }
@@ -299,6 +331,7 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
             actualColor: numToColor(actualNumber),
             actualParity: parityOf(actualNumber),
             actualSize: sizeOf(actualNumber),
+            currentImageId: imageId,
           });
         }
       } catch (e) {
@@ -321,7 +354,23 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         topk: HOTCOLD_K,
       });
 
-      const baseline_prior = buildBaselinePrior(bundle);
+      const baseline_prior = buildBaselinePrior(bundle, {
+        signals: {
+          accuracy_pct: Number(logs_feedback?.accuracy_pct ?? null),
+          streak: logs_feedback?.current_streak || null,
+          volatility: (() => {
+            const last10 = bundle.time_buckets?.last_10m || null;
+            if (!last10) return null;
+            const vals = Object.values(last10)
+              .map(Number)
+              .filter((n) => Number.isFinite(n));
+            if (!vals.length) return 0;
+            const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+            const varc = vals.reduce((a, b) => a + (b - mean) * (b - mean), 0) / vals.length;
+            return Math.max(0, Math.min(1, Math.sqrt(varc) / (mean || 1)));
+          })(),
+        },
+      });
 
       const digit_shuffle = digitShuffleSummary(parsed);
       const logs_feedback = await predictionLogsSummary({ limit: 200 });
@@ -418,18 +467,19 @@ TASK:
       let finalDist = combinePrior(baseline_prior, mults, { tau: 1.08, eps: 0.01 });
 
       const recentActual = (bundle.windows?.last_200_seq || []).slice(-10).reverse();
-      finalDist = penalizeRecent(finalDist, recentActual, 0.18);
+      finalDist = penalizeRecent(finalDist, recentActual, 0.12);
 
       const recentPredictedTop = (logs_tail || [])
         .map((r) => (Array.isArray(r.predicted_numbers) ? Number(r.predicted_numbers?.[0]) : null))
         .filter((n) => Number.isFinite(n))
         .slice(0, 8);
 
-      finalDist = penalizeRecent(finalDist, recentPredictedTop, 0.12);
+      finalDist = penalizeRecent(finalDist, recentPredictedTop, 0.05);
+
       const H = entropy(finalDist);
       let { result: topResult, prob: topProb } = argmaxKeyed(finalDist);
-      if (H < 2.1 || topProb > 0.38) {
-        finalDist = combinePrior(finalDist, {}, { tau: 1.18, eps: 0.03 });
+      if (H < 2.0 || topProb > 0.38) {
+        finalDist = combinePrior(finalDist, {}, { tau: 1.15, eps: 0.02 });
         ({ result: topResult, prob: topProb } = argmaxKeyed(finalDist));
       }
 

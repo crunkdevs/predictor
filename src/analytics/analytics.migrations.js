@@ -990,5 +990,21 @@ RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
   REFRESH MATERIALIZED VIEW mv_accuracy_breakdown;
 END$$;
+
+-- =======================================================================
+-- 9) RULE WEIGHTS AUTO-RESET MAINTENANCE
+-- =======================================================================
+CREATE OR REPLACE FUNCTION fn_rule_weights_maintenance(p_hours int DEFAULT 6)
+RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE rule_weights
+     SET disabled = false,
+         wrong_streak = 0,
+         updated_at = now()
+   WHERE disabled = true
+     AND now() - updated_at > make_interval(hours => p_hours);
+END$$;
+
   `);
 }
