@@ -286,7 +286,8 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
   logger.log?.('[PRED CFG]', {
     MODEL,
     TEMP,
-    LOOKBACK: Number(LOOKBACK),
+    LOOKBACK_RAW: LOOKBACK, // can be 'all' or '200'
+    LOOKBACK_NUM: Number.isFinite(Number(LOOKBACK)) ? Number(LOOKBACK) : null,
     HOTCOLD_K,
     PRED_MIN_SECONDS,
   });
@@ -331,7 +332,7 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
             actualColor: numToColor(actualNumber),
             actualParity: parityOf(actualNumber),
             actualSize: sizeOf(actualNumber),
-            currentImageId: imageId,
+            currentImageId: imageId, // <- IMPORTANT for correct pairing
           });
         }
       } catch (e) {
@@ -354,27 +355,27 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         topk: HOTCOLD_K,
       });
 
+      // fetch feedback stats BEFORE building prior (to pass adaptive signals)
+      const logs_feedback = await predictionLogsSummary({ limit: 200 });
+      const logs_tail = await recentPredictionLogsRaw({ limit: 15 });
+      const digit_shuffle = digitShuffleSummary(parsed);
+
+      // adaptive baseline prior (uses accuracy streak)
       const baseline_prior = buildBaselinePrior(bundle, {
         signals: {
-          accuracy_pct: Number(logs_feedback?.accuracy_pct ?? null),
+          accuracy_pct: Number(logs_feedback?.accuracy_pct ?? NaN),
           streak: logs_feedback?.current_streak || null,
           volatility: (() => {
             const last10 = bundle.time_buckets?.last_10m || null;
             if (!last10) return null;
-            const vals = Object.values(last10)
-              .map(Number)
-              .filter((n) => Number.isFinite(n));
+            const vals = Object.values(last10).map(Number).filter(Number.isFinite);
             if (!vals.length) return 0;
             const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
-            const varc = vals.reduce((a, b) => a + (b - mean) * (b - mean), 0) / vals.length;
+            const varc = vals.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (vals.length || 1);
             return Math.max(0, Math.min(1, Math.sqrt(varc) / (mean || 1)));
           })(),
         },
       });
-
-      const digit_shuffle = digitShuffleSummary(parsed);
-      const logs_feedback = await predictionLogsSummary({ limit: 200 });
-      const logs_tail = await recentPredictionLogsRaw({ limit: 15 });
 
       const instruction = `
 You adjust a BASELINE probability prior over results 0..27 for the Chamet Spin game.
