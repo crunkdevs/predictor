@@ -81,15 +81,15 @@ function buildBaselinePrior(bundle, cfg = {}) {
     w100 = 0.25,
     w200 = 0.1,
     wtot = 0.1,
-    gapBoost = 0.3,
-    streakBoost = 0.12,
-    colorReweight = 0.0,
+    gapBoost = 0.3, // was 0.2
+    streakBoost = 0.25,
   } = cfg;
 
   const N = 28;
   const windows = bundle.windows || {};
   const f = (map, i) => Number(map?.[String(i)] || 0);
 
+  // frequency score
   const freq = Array.from(
     { length: N },
     (_, i) =>
@@ -99,6 +99,7 @@ function buildBaselinePrior(bundle, cfg = {}) {
       wtot * f(windows.totals, i)
   );
 
+  // normalize to [0..1]
   const maxF = Math.max(...freq, 1);
   let s = freq.map((x) => x / maxF);
 
@@ -137,7 +138,6 @@ function buildBaselinePrior(bundle, cfg = {}) {
   }
 
   const shortWin = bundle.time_buckets?.last_10m || null;
-
   const longWin = bundle.coreStats?.color?.colors || bundle.coreStats?.color?.colors_pct || null;
 
   const targetColorShare = {};
@@ -154,7 +154,7 @@ function buildBaselinePrior(bundle, cfg = {}) {
     }
   }
 
-  if (colorReweight > 0 && Object.keys(targetColorShare).length) {
+  if (Object.keys(targetColorShare).length) {
     const cur = {};
     for (let i = 0; i < N; i++) {
       const c = numToColor(i);
@@ -166,7 +166,7 @@ function buildBaselinePrior(bundle, cfg = {}) {
       if (!c) continue;
       const have = (cur[c] || 0) / totalS;
       const want = Number(targetColorShare[c] || 0);
-      const delta = colorReweight * (want - (1 - have));
+      const delta = 0.18 * (want - (1 - have)); // strength
       s[i] *= Math.max(1e-9, 1 + delta);
     }
   }
@@ -177,7 +177,7 @@ function buildBaselinePrior(bundle, cfg = {}) {
   return prior;
 }
 
-function combinePrior(prior, mults, { tau = 1.12, eps = 0.03 } = {}) {
+function combinePrior(prior, mults, { tau = 1.05, eps = 0.01 } = {}) {
   const out = {};
   let Z = 0;
   for (let i = 0; i <= 27; i++) {
@@ -185,14 +185,14 @@ function combinePrior(prior, mults, { tau = 1.12, eps = 0.03 } = {}) {
     const p = Math.max(1e-12, Number(prior[k] || 0));
     let m = Number(mults?.[k]);
     if (!Number.isFinite(m)) m = 1.0;
-    m = Math.max(0.7, Math.min(1.45, m));
-    out[k] = Math.pow(p * m, 1 / (tau ?? 1.12));
+    m = Math.max(0.55, Math.min(1.7, m));
+    out[k] = Math.pow(p * m, 1 / tau);
     Z += out[k];
   }
   const u = 1 / 28;
   for (let i = 0; i <= 27; i++) {
     const k = String(i);
-    out[k] = (1 - (eps ?? 0.03)) * (out[k] / Z) + (eps ?? 0.03) * u;
+    out[k] = (1 - eps) * (out[k] / Z) + eps * u;
   }
   return out;
 }
@@ -418,17 +418,17 @@ TASK:
       let finalDist = combinePrior(baseline_prior, mults, { tau: 1.08, eps: 0.01 });
 
       const recentActual = (bundle.windows?.last_200_seq || []).slice(-10).reverse();
-      finalDist = penalizeRecent(finalDist, recentActual, 0.1);
+      finalDist = penalizeRecent(finalDist, recentActual, 0.18);
 
       const recentPredictedTop = (logs_tail || [])
         .map((r) => (Array.isArray(r.predicted_numbers) ? Number(r.predicted_numbers?.[0]) : null))
         .filter((n) => Number.isFinite(n))
         .slice(0, 8);
 
-      finalDist = penalizeRecent(finalDist, recentPredictedTop, 0.06);
+      finalDist = penalizeRecent(finalDist, recentPredictedTop, 0.12);
       const H = entropy(finalDist);
       let { result: topResult, prob: topProb } = argmaxKeyed(finalDist);
-      if (H < 2.3 || topProb > 0.34) {
+      if (H < 2.1 || topProb > 0.38) {
         finalDist = combinePrior(finalDist, {}, { tau: 1.18, eps: 0.03 });
         ({ result: topResult, prob: topProb } = argmaxKeyed(finalDist));
       }
