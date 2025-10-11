@@ -166,7 +166,6 @@ export async function fourteenSystems(req, res) {
 
 export async function refresh(req, res) {
   try {
-    // refresh MVs AND push to sockets
     await refreshAndPush();
     return ok(res, { refreshed: true });
   } catch (e) {

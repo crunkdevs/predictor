@@ -286,7 +286,7 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
   logger.log?.('[PRED CFG]', {
     MODEL,
     TEMP,
-    LOOKBACK_RAW: LOOKBACK, // can be 'all' or '200'
+    LOOKBACK_RAW: LOOKBACK,
     LOOKBACK_NUM: Number.isFinite(Number(LOOKBACK)) ? Number(LOOKBACK) : null,
     HOTCOLD_K,
     PRED_MIN_SECONDS,
@@ -332,7 +332,7 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
             actualColor: numToColor(actualNumber),
             actualParity: parityOf(actualNumber),
             actualSize: sizeOf(actualNumber),
-            currentImageId: imageId, // <- IMPORTANT for correct pairing
+            currentImageId: imageId,
           });
         }
       } catch (e) {
@@ -355,12 +355,10 @@ export async function analyzeLatestUnprocessed(limit = 3, logger = console) {
         topk: HOTCOLD_K,
       });
 
-      // fetch feedback stats BEFORE building prior (to pass adaptive signals)
       const logs_feedback = await predictionLogsSummary({ limit: 200 });
       const logs_tail = await recentPredictionLogsRaw({ limit: 15 });
       const digit_shuffle = digitShuffleSummary(parsed);
 
-      // adaptive baseline prior (uses accuracy streak)
       const baseline_prior = buildBaselinePrior(bundle, {
         signals: {
           accuracy_pct: Number(logs_feedback?.accuracy_pct ?? NaN),
