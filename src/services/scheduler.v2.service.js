@@ -8,7 +8,7 @@ import {
 } from './window.service.js';
 import { refreshAnalyticsMaterializedViews } from '../analytics/analytics.handlers.js';
 
-const TZ = process.env.SCHEDULER_TZ || 'Asia/Karachi';
+const TZ = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
 
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE_V2 || '*/60 * * * * *';
 

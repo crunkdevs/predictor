@@ -1,6 +1,6 @@
 import { pool } from '../config/db.config.js';
 
-const TZ = process.env.SCHEDULER_TZ || 'Asia/Karachi';
+const TZ = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
 const FIRST_PREDICT_DELAY_MIN = Number(process.env.FIRST_PREDICT_DELAY_MIN || 20);
 const PAUSE_AFTER_WRONGS = Number(process.env.PRED_PAUSE_AFTER_WRONGS || 3);
 const WRONG_PAUSE_MIN = Number(process.env.PRED_PAUSE_MIN || 10);

@@ -16,7 +16,7 @@ import {
 
 // ---------- Config ----------
 
-const TZ = process.env.SCHEDULER_TZ || 'Asia/Karachi';
+const TZ = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
 const POOL_SIZE = 8;
 const WRONG_PAUSE_MIN = Number(process.env.PRED_PAUSE_MIN || 10);
 const PAUSE_AFTER_WRONGS = Number(process.env.PRED_PAUSE_AFTER_WRONGS || 3);

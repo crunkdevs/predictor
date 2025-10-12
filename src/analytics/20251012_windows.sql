@@ -155,7 +155,7 @@ BEGIN
 END$$;
 
 CREATE INDEX IF NOT EXISTS idx_predictions_source_day
-  ON predictions ((created_at AT TIME ZONE 'Asia/Karachi')::date, source);
+  ON predictions ((created_at AT TIME ZONE 'Asia/Shanghai')::date, source);
 
 CREATE INDEX IF NOT EXISTS idx_predictions_window ON predictions(window_id);
 
