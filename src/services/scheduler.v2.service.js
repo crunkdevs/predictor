@@ -8,8 +8,6 @@ import {
 } from './window.service.js';
 import { refreshAnalyticsMaterializedViews } from '../analytics/analytics.handlers.js';
 
-const TZ = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
-
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE_V2 || '*/60 * * * * *';
 
 const LOCK_KEY = Number(process.env.SCHEDULER_LOCK_KEY || 42843);
@@ -52,8 +50,6 @@ async function maintenance(logger = console) {
 }
 
 export function startSchedulerV2(logger = console) {
-  logger.info?.(`[SchedulerV2] Starting… CRON="${CRON_SCHEDULE}" TZ=${TZ}`);
-
   maintenance(logger)
     .then(async () => {
       const w = await maintainAndGetCurrentWindow();
@@ -64,32 +60,28 @@ export function startSchedulerV2(logger = console) {
     })
     .catch((e) => logger.error?.('[SchedulerV2] Initial maintenance failed:', e));
 
-  const task = cron.schedule(
-    CRON_SCHEDULE,
-    async () => {
-      const tickIso = new Date().toISOString();
-      logger.log?.(`\n⏰ [SchedulerV2] Tick ${tickIso} (server clock UTC)`);
+  const task = cron.schedule(CRON_SCHEDULE, async () => {
+    const tickIso = new Date().toISOString();
+    logger.log?.(`\n⏰ [SchedulerV2] Tick ${tickIso} (server clock UTC)`);
 
-      await withPgLock(
-        LOCK_KEY,
-        async () => {
-          await maintenance(logger);
+    await withPgLock(
+      LOCK_KEY,
+      async () => {
+        await maintenance(logger);
 
-          const out = await analyzeV2(logger);
-          if (!out) return;
+        const out = await analyzeV2(logger);
+        if (!out) return;
 
-          logger.log?.('[SchedulerV2] Tick result:', {
-            window_id: out.window?.id,
-            pattern: out.pattern,
-            source: out.source,
-            top: out.prediction?.top3 || out.prediction?.top_candidates?.slice?.(0, 3),
-          });
-        },
-        logger
-      );
-    },
-    { timezone: TZ }
-  );
+        logger.log?.('[SchedulerV2] Tick result:', {
+          window_id: out.window?.id,
+          pattern: out.pattern,
+          source: out.source,
+          top: out.prediction?.top3 || out.prediction?.top_candidates?.slice?.(0, 3),
+        });
+      },
+      logger
+    );
+  });
 
   return task;
 }
