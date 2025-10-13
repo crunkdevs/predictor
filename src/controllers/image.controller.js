@@ -40,11 +40,6 @@ export async function getImage(req, res) {
 
 export async function uploadB64(req, res) {
   try {
-    const token = req.header('x-upload-token');
-    if (!token || token !== (process.env.UPLOAD_TOKEN || 'supersecret')) {
-      return bad(res, 401, 'unauthorized');
-    }
-
     const { filename, mime_type, content_b64 } = req.body || {};
     if (!filename || !content_b64) {
       return bad(res, 400, 'filename & content_b64 required');
