@@ -1,6 +1,12 @@
 import OpenAI from 'openai';
 import { advancedAnalyticsBundle } from '../analytics/analytics.handlers.js';
 import { getLatestAnchorImageId } from '../analytics/analytics.handlers.js';
+import {
+  latestUnprocessedImages,
+  hasStatsForImage,
+  insertImageStats,
+} from '../models/stats.model.js';
+import { parseGameScreenshot } from './image-info-extract.service.js';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -9,6 +15,26 @@ const TEMP = Number(process.env.PRED_TEMPERATURE || 0.3);
 
 export async function analyzeLatestUnprocessed(logger = console) {
   logger.log?.('[AIAnalyzer] 🧩 Triggered via window/pattern deviation');
+
+  try {
+    const ids = await latestUnprocessedImages(1);
+    if (ids.length) {
+      const id = ids[0];
+      if (!(await hasStatsForImage(id))) {
+        const parsed = await parseGameScreenshot(id);
+        if (parsed?.result != null) {
+          await insertImageStats({
+            imageId: id,
+            numbers: parsed.numbers,
+            result: parsed.result,
+          });
+          logger.log?.(`[AIAnalyzer] Ingested image=${id} into image_stats`);
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn?.('[AIAnalyzer] pre-ingest skipped:', e?.message || e);
+  }
 
   const anchor = await getLatestAnchorImageId();
   if (!anchor) {
