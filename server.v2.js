@@ -4,17 +4,16 @@ import http from 'http';
 
 import { initSchema } from './src/config/db.config.js';
 import imageRoutes from './src/routes/image.route.js';
-import analyticsRoutes from './src/routes/analytics.route.js';
+import analyticsV2Routes from './src/routes/analytics.v2.route.js';
 
 import {
   applyAdvancedAnalyticsSchema,
   applyStatsSchema,
 } from './src/analytics/analytics.migrations.js';
 
-import { setupAnalyticsWS } from './src/analytics/analytics.ws.js';
-
 import { startSchedulerV2 } from './src/services/scheduler.v2.service.js';
 import { ensureTodayWindows, closeExpiredWindows } from './src/services/window.service.js';
+import { setupAnalyticsV2WS } from './src/analytics/analytics.v2.ws.js';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -25,7 +24,7 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/health', (_req, res) => res.status(200).send('ok'));
 
 app.use('/api', imageRoutes);
-app.use('/api/analytics', analyticsRoutes);
+app.use('/api/analytics', analyticsV2Routes);
 
 await initSchema();
 await applyStatsSchema();
@@ -42,7 +41,7 @@ try {
 
 const server = http.createServer(app);
 
-setupAnalyticsWS(server, { path: '/ws/analytics' });
+setupAnalyticsV2WS(server, { path: '/ws/analytics' });
 
 app.use(function (err, req, res, next) {
   console.error('Error:', err);
