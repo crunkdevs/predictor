@@ -39,6 +39,60 @@ const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
  * WINDOWS / STATE
  * ----------------------------------------------------- */
 
+export async function backfillWindowedTransitions(req, res) {
+  try {
+    const force = String(req.query.force || '0') === '1';
+    const tz = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
+
+    // Guard: prevent accidental re-run (would double counts)
+    const { rows: crows } = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM number_transitions_windowed`
+    );
+    const existing = Number(crows?.[0]?.c || 0);
+
+    if (existing > 0 && !force) {
+      return bad(
+        res,
+        409,
+        `already populated (${existing} rows). Use ?force=1 to TRUNCATE and rebuild.`
+      );
+    }
+
+    if (existing > 0 && force) {
+      await pool.query(`TRUNCATE number_transitions_windowed`);
+    }
+
+    // Backfill from v_spins (uses your PL/pgSQL function)
+    await pool.query(`SELECT fn_backfill_window_transitions($1)`, [tz]);
+
+    const { rows: stats } = await pool.query(
+      `SELECT COUNT(*)::int AS rows, MIN(last_seen) AS first_seen, MAX(last_seen) AS last_seen
+         FROM number_transitions_windowed`
+    );
+
+    return ok(res, {
+      message: 'windowed transitions backfilled',
+      tz,
+      details: stats?.[0] || {},
+      forced: force,
+    });
+  } catch (e) {
+    console.error('[v2.backfillWindowedTransitions]', e);
+    return bad(res, 500, e?.message || 'failed');
+  }
+}
+
+export async function backfillTransitions(req, res) {
+  try {
+    const tz = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
+    await pool.query(`SELECT fn_backfill_window_transitions($1)`, [tz]);
+    return ok(res, { status: 'backfill_started', tz });
+  } catch (e) {
+    console.error('[v2.backfillTransitions]', e);
+    return bad(res, 500, e?.message || 'failed');
+  }
+}
+
 export async function statusSummary(req, res) {
   try {
     const w = await maintainAndGetCurrentWindow();
@@ -248,6 +302,17 @@ export async function aiTriggerStatus(req, res) {
 
     // synthesize a minimal "windowState" expected by shouldTriggerAI
     const state = await fetchWindowState(w.id);
+    let deviationSignal = false;
+    let reversalSignal = false;
+    try {
+      const dev = await detectFrequencyDeviation();
+      deviationSignal = !!(dev?.deviation || dev?.reversal);
+    } catch {}
+    try {
+      const { detectTrendReversal } = await import('../services/trend.service.js');
+      const rev = await detectTrendReversal();
+      reversalSignal = !!rev?.reversal;
+    } catch {}
     const out = await shouldTriggerAI({
       windowState: {
         id: state.id,
@@ -255,7 +320,8 @@ export async function aiTriggerStatus(req, res) {
         first_predict_after: state.first_predict_after,
       },
       patternState: { wrong_streak: state.wrong_streak, pattern_code: state.pattern_code },
-      deviationSignal: false,
+      deviationSignal,
+      reversalSignal,
     });
 
     return ok(res, { window_id: w.id, trigger: out });

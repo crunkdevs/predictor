@@ -7,6 +7,7 @@ import {
   closeExpiredWindows,
   ensureTodayWindows,
 } from './window.service.js';
+import { refreshAnalyticsMaterializedViews } from '../analytics/analytics.handlers.js';
 
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE_V2 || '*/60 * * * * *';
 const LOCK_KEY = Number(process.env.SCHEDULER_LOCK_KEY || 42843);
@@ -55,6 +56,13 @@ async function maintenance(logger = console) {
     }
   } catch (e) {
     logger.warn?.('[SchedulerV2] snapshot store skipped:', e?.message || e);
+  }
+
+  try {
+    await refreshAnalyticsMaterializedViews();
+    logger.info?.('[SchedulerV2] refreshed analytics materialized views');
+  } catch (e) {
+    logger.warn?.('[SchedulerV2] refresh MVs skipped:', e?.message || e);
   }
 
   try {

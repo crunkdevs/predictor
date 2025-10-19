@@ -18,6 +18,8 @@ import {
 
 import { parseGameScreenshot } from './image-info-extract.service.js';
 
+import { processOutcomeForImage } from './outcome.service.js';
+
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const MODEL = process.env.PRED_MODEL || 'gpt-5-mini';
@@ -40,6 +42,11 @@ export async function analyzeLatestUnprocessed(logger = console) {
             result: parsed.result,
           });
           logger.log?.(`[AIAnalyzer] Ingested image=${id} into image_stats`);
+          try {
+            await processOutcomeForImage(id);
+          } catch (e) {
+            logger.warn?.('[AIAnalyzer] processOutcomeForImage failed:', e?.message || e);
+          }
         }
       }
     }

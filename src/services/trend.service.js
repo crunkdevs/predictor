@@ -1,4 +1,4 @@
-import { pool } from '../config/db.config';
+import { pool } from '../config/db.config.js';
 
 export async function detectTrendReversal({
   shortM = Number(process.env.REVERSAL_SHORT_MIN || 10),
@@ -9,6 +9,15 @@ export async function detectTrendReversal({
   shortM = Math.max(5, shortM | 0);
   longM = Math.max(shortM + 1, longM | 0);
   delta = Math.max(0.01, Math.min(0.5, Number(delta)));
+
+  // TTL cache
+  const TTL = Math.max(5, Number(process.env.TREND_TTL_SEC || 60)) * 1000;
+  if (!global.__TREND_CACHE) global.__TREND_CACHE = { ts: 0, out: null, key: '' };
+  const key = `${shortM}|${longM}|${delta}`;
+  const now = Date.now();
+  if (global.__TREND_CACHE.key === key && now - global.__TREND_CACHE.ts < TTL) {
+    return global.__TREND_CACHE.out;
+  }
 
   // Helper to fetch shares for a rolling window
   async function fetchShares(intervalSql) {
@@ -84,7 +93,7 @@ export async function detectTrendReversal({
       }
     : null;
 
-  return {
+  const out = {
     reversal: Boolean(colorFlip || sizeFlip),
     color: colorDetail,
     size: sizeDetail,
@@ -106,4 +115,8 @@ export async function detectTrendReversal({
     },
     params: { shortM, longM, delta },
   };
+
+  global.__TREND_CACHE = { ts: now, out, key };
+
+  return out;
 }

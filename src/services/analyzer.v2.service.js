@@ -7,6 +7,8 @@ import {
   updateStreak,
   attachPredictionWindow,
   fetchWindowState,
+  setReactivationState,
+  clearReactivationState,
 } from './window.service.js';
 import { detectAndSetPattern } from './pattern.detector.js';
 import { localPredict, shouldTriggerAI } from './prediction.engine.js';
@@ -36,6 +38,7 @@ export async function analyzeV2(logger = console) {
   logger.log?.(`[AnalyzerV2] Active Pattern = ${pattern}`, metrics);
 
   // ---- 48h pattern reactivation: compute signature, match & load top_pool ----
+  // ---- 48h pattern reactivation: compute signature, match & load top_pool ----
   let reactivation = null;
   try {
     const { rows: sigRows } = await pool.query(`SELECT fn_snapshot_signature_48h(now()) AS sig`);
@@ -43,8 +46,7 @@ export async function analyzeV2(logger = console) {
 
     if (sig) {
       const { rows: matchRows } = await pool.query(
-        `SELECT snapshot_id, similarity
-           FROM fn_match_pattern_snapshots($1::jsonb, 1)`,
+        `SELECT snapshot_id, similarity FROM fn_match_pattern_snapshots($1::jsonb, 1)`,
         [sig]
       );
       const best = matchRows?.[0] || null;
@@ -65,6 +67,16 @@ export async function analyzeV2(logger = console) {
         };
         logger.log?.('[AnalyzerV2] 🔁 Reactivation candidate:', reactivation);
       }
+    }
+
+    // persist / clear reactivation state
+    if (reactivation && Number(reactivation.similarity) >= 0.75) {
+      await setReactivationState(windowId, {
+        snapshotId: reactivation.snapshot_id,
+        similarity: reactivation.similarity,
+      });
+    } else {
+      await clearReactivationState(windowId);
     }
   } catch (e) {
     logger.warn?.('[AnalyzerV2] snapshot match skipped:', e?.message || e);

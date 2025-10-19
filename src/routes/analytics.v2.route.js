@@ -26,8 +26,8 @@ router.get('/v2/observation/status', v2.observationStatus);
 
 router.get('/v2/trend/status', v2.trendStatus);
 
-router.get('/v2/trend/status', v2.trendStatus);
-
 router.get('/v2/status', v2.statusSummary);
+
+router.post('/v2/transitions/backfill', v2.backfillWindowedTransitions);
 
 export default router;

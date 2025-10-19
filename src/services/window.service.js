@@ -11,6 +11,19 @@ const OBSERVE_LOOKBACK = Number(process.env.OBSERVE_LOOKBACK || 30);
 const OBSERVE_MAX_RUN = Number(process.env.OBSERVE_MAX_RUN || 3);
 const OBSERVE_MIN_COLORS = Number(process.env.OBSERVE_MIN_COLORS || 5);
 
+export async function deactivatePattern(windowId) {
+  if (!Number.isFinite(Number(windowId))) return;
+  // flip is_active off and reset to 'A' (normal)
+  await pool.query(
+    `UPDATE window_pattern_state
+       SET is_active = FALSE,
+           updated_at = now()
+     WHERE window_id = $1`,
+    [windowId]
+  );
+  await setActivePattern(windowId, 'A');
+}
+
 export async function ensureWindowsForDay(dayDate) {
   const { rows } = await pool.query(
     `SELECT * FROM fn_ensure_windows_for_day($1::date, $2::text, $3::int)`,
@@ -155,7 +168,16 @@ export async function enterObserveMode(windowId) {
 
 export async function tryExitObserveIfStabilized(windowId) {
   const ok = await isStabilized();
-  if (ok) await setMode(windowId, 'normal');
+  if (ok) {
+    await setMode(windowId, 'normal');
+    await pool.query(
+      `UPDATE window_pattern_state
+        SET is_active = TRUE,
+            updated_at = now()
+      WHERE window_id = $1`,
+      [windowId]
+    );
+  }
   return ok;
 }
 
@@ -234,6 +256,8 @@ export async function updateStreak(windowId, { correct }) {
 
   if (wrong >= PAUSE_AFTER_WRONGS) {
     await pausePattern(windowId, WRONG_PAUSE_MIN);
+    await deactivatePattern(windowId);
+    await setActivePattern(windowId, 'Unknown');
     // Note: mode is set to 'paused' in pausePattern(); after expiry canPredict() shifts to 'observe'
   }
 
@@ -302,4 +326,32 @@ export async function maintainAndGetCurrentWindow() {
   await closeExpiredWindows();
   const w = await getCurrentWindow();
   return w;
+}
+
+export async function setReactivationState(windowId, { snapshotId, similarity }) {
+  if (!Number.isFinite(windowId)) return;
+  await pool.query(
+    `UPDATE window_pattern_state
+       SET react_active = TRUE,
+           react_snapshot_id = $2,
+           react_similarity = $3,
+           react_started_at = COALESCE(react_started_at, now()),
+           updated_at = now()
+     WHERE window_id = $1`,
+    [Number(windowId), Number(snapshotId) || null, Number(similarity) || null]
+  );
+}
+
+export async function clearReactivationState(windowId) {
+  if (!Number.isFinite(windowId)) return;
+  await pool.query(
+    `UPDATE window_pattern_state
+       SET react_active = FALSE,
+           react_snapshot_id = NULL,
+           react_similarity = NULL,
+           react_started_at = NULL,
+           updated_at = now()
+     WHERE window_id = $1`,
+    [Number(windowId)]
+  );
 }

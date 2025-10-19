@@ -59,19 +59,36 @@ async function topicV2(topic, params = {}) {
       const w = await maintainAndGetCurrentWindow();
       if (!w) return { error: 'no_window' };
       const s = await fetchWindowState(w.id);
+
       let deviationSignal = false;
+      let reversalSignal = false;
       try {
-        const { detectFrequencyDeviation } = await import('../services/deviation.service.js');
-        const dev = await detectFrequencyDeviation();
-        deviationSignal = !!(dev?.deviation || dev?.reversal);
+        const { detectTrendReversal } = await import('../services/trend.service.js');
+        const rev = await detectTrendReversal();
+        reversalSignal = !!rev?.reversal;
       } catch {}
+
       const trig = await shouldTriggerAI({
         windowState: { id: s.id, status: s.status, first_predict_after: s.first_predict_after },
         patternState: { wrong_streak: s.wrong_streak, pattern_code: s.pattern_code },
         deviationSignal,
+        reversalSignal,
       });
+
+      // WS notify (your style: side-effect before return)
+      try {
+        pushAnalyticsV2('analytics-v2/ai-trigger', {
+          window_id: w.id,
+          trigger: trig, // { trigger: boolean, reason: string }
+          deviationSignal,
+          reversalSignal,
+          ts: new Date().toISOString(),
+        });
+      } catch {}
+
       return { window_id: w.id, trigger: trig };
     }
+
     case 'v2/deviation': {
       try {
         const { detectFrequencyDeviation } = await import('../services/deviation.service.js');
@@ -167,11 +184,21 @@ async function topicV2(topic, params = {}) {
 
       const { rows: snapRows } = await pool.query(
         `SELECT id, start_at, end_at, sample_size, top_pool, hit_rate, created_at
-           FROM pattern_snapshots
-          WHERE id = $1
-          LIMIT 1`,
+       FROM pattern_snapshots
+      WHERE id = $1
+      LIMIT 1`,
         [best.snapshot_id]
       );
+
+      // WS notify probe result (on-demand)
+      try {
+        pushAnalyticsV2('analytics-v2/reactivation-probe', {
+          snapshot_id: Number(best.snapshot_id),
+          similarity: Number(best.similarity),
+          top_pool: Array.isArray(snapRows?.[0]?.top_pool) ? snapRows[0].top_pool : [],
+          ts: new Date().toISOString(),
+        });
+      } catch {}
 
       return {
         match: {
@@ -217,6 +244,18 @@ async function topicV2(topic, params = {}) {
       } catch {}
 
       const gate = await canPredict(w.id);
+
+      try {
+        pushAnalyticsV2('analytics-v2/status', {
+          window: { id: w.id, idx: w.window_idx, start_at: w.start_at, end_at: w.end_at },
+          mode: state.mode || 'normal',
+          gate,
+          deviation: deviation || {},
+          reversal: trend || {},
+          reactivation: react,
+          ts: new Date().toISOString(),
+        });
+      } catch {}
 
       return {
         window: { id: w.id, window_idx: w.window_idx, start_at: w.start_at, end_at: w.end_at },
@@ -336,7 +375,6 @@ export function setupAnalyticsV2WS(httpServer, { path = '/ws/analytics-v2' } = {
   return wss;
 }
 
-// helper: let services push live prediction events to v2 clients as well
 export function pushAnalyticsV2(eventType, payload) {
   for (const ws of CLIENTS)
     if (ws.readyState === 1) safeSend(ws, { type: eventType, payload, ts: Date.now() });

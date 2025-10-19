@@ -368,13 +368,71 @@ export async function scoreAndRank(pool, context = {}) {
 }
 // ---------- AI Trigger rules ----------
 
-export async function shouldTriggerAI({ windowState, patternState, deviationSignal }) {
+// --- AI-only wrong streak guard ---
+const AI_STREAK_MAX_WRONGS = Number(process.env.AI_STREAK_MAX_WRONGS || 3);
+const AI_STREAK_COOLDOWN_MIN = Number(process.env.AI_STREAK_COOLDOWN_MIN || 120);
+
+async function getAiConsecutiveWrongStreak(limit = 10) {
+  // Read recent AI predictions; 'correct' we store in prediction JSON (prediction.correct)
+  const { rows } = await pool.query(
+    `SELECT
+        created_at,
+        COALESCE( (prediction->>'correct')::boolean, NULL) AS correct
+       FROM predictions
+      WHERE source='ai'
+      ORDER BY created_at DESC
+      LIMIT $1`,
+    [Math.max(3, Math.min(50, limit))]
+  );
+
+  let streak = 0;
+  let lastTs = null;
+  for (const r of rows) {
+    if (r.correct === false) {
+      if (streak === 0) lastTs = r.created_at;
+      streak++;
+    } else if (r.correct === true) {
+      break; // streak breaks on first true
+    } else {
+      break; // unknown/null → also break
+    }
+  }
+  return { streak, lastTs }; // lastTs = time when the latest wrong in this streak was logged
+}
+
+export async function shouldTriggerAI({
+  windowState,
+  patternState,
+  deviationSignal,
+  reversalSignal,
+}) {
   if (!windowState || windowState.status !== 'open') {
     return { trigger: false, reason: 'window_closed_or_missing' };
   }
+
   if (new Date() < new Date(windowState.first_predict_after)) {
     return { trigger: false, reason: 'before_first_predict_after' };
   }
+
+  try {
+    const { streak, lastTs } = await getAiConsecutiveWrongStreak(10);
+    if (streak >= AI_STREAK_MAX_WRONGS) {
+      if (lastTs) {
+        const ms = Date.now() - new Date(lastTs).getTime();
+        const minSince = ms / 60000;
+        if (minSince < AI_STREAK_COOLDOWN_MIN) {
+          return {
+            trigger: false,
+            reason: 'ai_consecutive_wrong_streak_cooldown',
+            details: {
+              streak,
+              min_remaining: Math.max(0, Math.ceil(AI_STREAK_COOLDOWN_MIN - minSince)),
+            },
+          };
+        }
+      }
+    }
+  } catch {}
 
   if (windowState.id) {
     const { rows } = await pool.query(
@@ -407,9 +465,13 @@ export async function shouldTriggerAI({ windowState, patternState, deviationSign
     if (deltaH < AI_MIN_GAP_HOURS) return { trigger: false, reason: 'ai_gap_limit' };
   }
 
-  if (deviationSignal === true) return { trigger: true, reason: 'sudden_deviation' };
-  if (patternState?.wrong_streak >= PAUSE_AFTER_WRONGS)
-    return { trigger: true, reason: 'wrong_streak_3plus' };
+  const dev = deviationSignal === true;
+  const rev = reversalSignal === true;
+  const wsWrong = Number(patternState?.wrong_streak || 0);
+
+  if (dev) return { trigger: true, reason: 'sudden_deviation' };
+  if (rev) return { trigger: true, reason: 'trend_reversal' };
+  if (wsWrong >= PAUSE_AFTER_WRONGS) return { trigger: true, reason: 'wrong_streak_3plus' };
   if (!patternState?.pattern_code || patternState?.pattern_code === 'Unknown')
     return { trigger: true, reason: 'unknown_pattern' };
 

@@ -161,25 +161,44 @@ BEGIN
 END;
 $$;
 
--- 4) Find similar snapshots by signature (simple similarity: color L1 + parity/size diffs + Jaccard on top_numbers)
--- Returns: snapshot id, similarity (0..1, higher is better)
-CREATE OR REPLACE FUNCTION fn_match_pattern_snapshots(p_sig JSONB, p_limit INT DEFAULT 3)
+-- Replace the function with broader candidate search:
+-- - prioritizes last 24h
+-- - includes a large recent-lifetime pool
+-- Backwards compatible: existing calls with 2 args still work.
+
+CREATE OR REPLACE FUNCTION fn_match_pattern_snapshots(
+  p_sig JSONB,
+  p_limit INT DEFAULT 3,
+  p_recent_limit INT DEFAULT 2000,         -- lifetime fallback pool size
+  p_lookback_hours INT DEFAULT 24          -- "last 24h" priority window
+)
 RETURNS TABLE(snapshot_id BIGINT, similarity NUMERIC)
 LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
   RETURN QUERY
-  WITH cand AS (
-    SELECT id, signature, top_pool
+  WITH c24 AS (  -- last 24h priority set
+    SELECT id, signature, top_pool, end_at
     FROM pattern_snapshots
+    WHERE end_at >= (now() - make_interval(hours => p_lookback_hours))
+  ),
+  crest AS (     -- broader "lifetime recent" fallback pool
+    SELECT id, signature, top_pool, end_at
+    FROM pattern_snapshots
+    WHERE end_at < (now() - make_interval(hours => p_lookback_hours))
     ORDER BY end_at DESC
-    LIMIT 200  -- search recent first; adjust as needed
+    LIMIT GREATEST(50, p_recent_limit)
+  ),
+  cand AS (
+    SELECT id, signature, top_pool FROM c24
+    UNION ALL
+    SELECT id, signature, top_pool FROM crest
   ),
   scored AS (
     SELECT
       id,
-      -- color L1 distance over known palette
+      -- color L1 distance
       (
         COALESCE(ABS( (signature->'color_share'->>'Red')::float
                     - (p_sig->'color_share'->>'Red')::float ), 0) +
@@ -196,7 +215,7 @@ BEGIN
         COALESCE(ABS( (signature->'color_share'->>'Gray')::float
                     - (p_sig->'color_share'->>'Gray')::float ), 0)
       ) AS color_l1,
-      -- parity/size absolute diffs (percent space 0-100)
+      -- parity/size diffs
       COALESCE(ABS( (signature->'parity_pct'->>'odd_pct')::float
                   - (p_sig->'parity_pct'->>'odd_pct')::float ), 0) AS odd_diff,
       COALESCE(ABS( (signature->'size_pct'->>'small_pct')::float
@@ -219,11 +238,10 @@ BEGIN
   norm AS (
     SELECT
       id,
-      -- normalize each component into [0..1] similarity; weights can be tuned
-      GREATEST(0, 1 - (color_l1/2.0))                         AS sim_color,
-      GREATEST(0, 1 - (odd_diff/100.0))                       AS sim_parity,
-      GREATEST(0, 1 - (small_diff/100.0))                     AS sim_size,
-      COALESCE(jaccard_top, 0)                                AS sim_top
+      GREATEST(0, 1 - (color_l1/2.0)) AS sim_color,
+      GREATEST(0, 1 - (odd_diff/100.0)) AS sim_parity,
+      GREATEST(0, 1 - (small_diff/100.0)) AS sim_size,
+      COALESCE(jaccard_top, 0) AS sim_top
     FROM scored
   ),
   combined AS (

@@ -13,6 +13,14 @@ export async function detectFrequencyDeviation({
   const shortWindow = `${Math.max(5, shortM)} minutes`;
   const longWindow = `${Math.max(1, longH)} hours`;
 
+  const TTL = Math.max(5, Number(process.env.DEVIATION_TTL_SEC || 60)) * 1000;
+  if (!global.__DEV_CACHE) global.__DEV_CACHE = { ts: 0, out: null, key: '' };
+  const key = `${shortM}|${longH}`;
+  const now = Date.now();
+  if (global.__DEV_CACHE.key === key && now - global.__DEV_CACHE.ts < TTL) {
+    return global.__DEV_CACHE.out;
+  }
+
   const q = `
     WITH short AS (
       SELECT result_color, COUNT(*) AS c
@@ -47,7 +55,16 @@ export async function detectFrequencyDeviation({
   `;
 
   const { rows } = await pool.query(q);
-  if (!rows.length) return { deviation: false, details: [] };
+  if (!rows.length) {
+    const out = {
+      deviation: false,
+      details: [],
+      shortWindow: `${shortM} minutes`,
+      longWindow: `${longH} hours`,
+    };
+    global.__DEV_CACHE = { ts: now, out, key };
+    return out;
+  }
 
   // compute average ratios
   const ratios = rows.map((r) => Number(r.ratio || 0));
