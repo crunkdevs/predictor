@@ -1,3 +1,4 @@
+// services/analyzer.v2.service.js
 import { pool } from '../config/db.config.js';
 import {
   maintainAndGetCurrentWindow,
@@ -5,11 +6,14 @@ import {
   markPredictedNow,
   updateStreak,
   attachPredictionWindow,
+  fetchWindowState,
 } from './window.service.js';
 import { detectAndSetPattern } from './pattern.detector.js';
 import { localPredict, shouldTriggerAI } from './prediction.engine.js';
 import { pushAnalytics } from '../analytics/analytics.ws.js';
 import { analyzeLatestUnprocessed } from './analyzer.ai.service.js';
+import { detectFrequencyDeviation } from './deviation.service.js';
+import { detectTrendReversal } from './trend.service.js';
 
 export async function analyzeV2(logger = console) {
   const now = new Date();
@@ -31,29 +35,106 @@ export async function analyzeV2(logger = console) {
   const { pattern, metrics } = await detectAndSetPattern(windowId);
   logger.log?.(`[AnalyzerV2] Active Pattern = ${pattern}`, metrics);
 
-  const windowState = await pool.query(
-    `SELECT * FROM window_pattern_state WHERE window_id=$1 LIMIT 1`,
-    [windowId]
-  );
-  const state = windowState.rows[0] || {};
+  // ---- 48h pattern reactivation: compute signature, match & load top_pool ----
+  let reactivation = null;
+  try {
+    const { rows: sigRows } = await pool.query(`SELECT fn_snapshot_signature_48h(now()) AS sig`);
+    const sig = sigRows?.[0]?.sig || null;
 
-  const aiTrigger = await shouldTriggerAI({
-    windowState: state,
-    pattern,
-    confidence: null,
-    cooldown: state?.paused_until,
+    if (sig) {
+      const { rows: matchRows } = await pool.query(
+        `SELECT snapshot_id, similarity
+           FROM fn_match_pattern_snapshots($1::jsonb, 1)`,
+        [sig]
+      );
+      const best = matchRows?.[0] || null;
+
+      if (best && Number(best.similarity) >= 0.75) {
+        const { rows: snapRows } = await pool.query(
+          `SELECT id, top_pool FROM pattern_snapshots WHERE id = $1 LIMIT 1`,
+          [best.snapshot_id]
+        );
+        const snap = snapRows?.[0] || null;
+
+        reactivation = {
+          snapshot_id: Number(best.snapshot_id),
+          similarity: Number(best.similarity),
+          snapshot_top_pool: Array.isArray(snap?.top_pool)
+            ? snap.top_pool.map((n) => Number(n)).filter((n) => n >= 0 && n <= 27)
+            : [],
+        };
+        logger.log?.('[AnalyzerV2] 🔁 Reactivation candidate:', reactivation);
+      }
+    }
+  } catch (e) {
+    logger.warn?.('[AnalyzerV2] snapshot match skipped:', e?.message || e);
+  }
+
+  // Deviation (spikes/drops)
+  let deviationSignal = false;
+  try {
+    const dev = await detectFrequencyDeviation();
+    deviationSignal = Boolean(
+      dev?.is_spike_or_drop || dev?.spike || dev?.drop || dev?.reversal || dev?.deviation
+    );
+    if (deviationSignal) logger.log?.('[AnalyzerV2] ⚠️ Frequency deviation detected.');
+  } catch (e) {
+    logger.warn?.('[AnalyzerV2] deviation detection failed:', e?.message || e);
+  }
+
+  // Trend reversal (Warm↔Cool, size small↔big)
+  let reversalSignal = false;
+  let trendDetail = null;
+  try {
+    const rev = await detectTrendReversal();
+    reversalSignal = !!rev?.reversal;
+    trendDetail = rev || null;
+    if (reversalSignal) logger.log?.('[AnalyzerV2] 🔄 Trend reversal detected.', rev);
+  } catch (e) {
+    logger.warn?.('[AnalyzerV2] trend reversal detect failed:', e?.message || e);
+  }
+
+  // AI trigger decision
+  const s = await fetchWindowState(windowId);
+  const aiGate = await shouldTriggerAI({
+    windowState: {
+      id: s?.id,
+      status: s?.status,
+      first_predict_after: s?.first_predict_after,
+    },
+    patternState: {
+      wrong_streak: s?.wrong_streak,
+      pattern_code: s?.pattern_code,
+    },
+    deviationSignal,
+    reversalSignal,
   });
 
+  // Generate prediction
   let prediction = null;
   let source = 'local';
 
   try {
-    if (aiTrigger) {
+    if (aiGate?.trigger) {
       logger.log?.('[AnalyzerV2] 🤖 AI Trigger activated.');
       prediction = await analyzeLatestUnprocessed(logger);
       source = 'ai';
     } else {
-      prediction = await localPredict({ windowState: state, pattern_code: pattern });
+      prediction = await localPredict({
+        windowId,
+        context: {
+          window_idx: Number(window.window_idx),
+          ...(trendDetail ? { trend: trendDetail } : {}),
+          ...(reactivation
+            ? {
+                reactivation: {
+                  similarity: reactivation.similarity,
+                  snapshot_top_pool: reactivation.snapshot_top_pool,
+                },
+              }
+            : {}),
+        },
+      });
     }
   } catch (e) {
     logger.error?.('[AnalyzerV2] Prediction generation failed', e);
@@ -65,6 +146,7 @@ export async function analyzeV2(logger = console) {
     return null;
   }
 
+  // Persist prediction
   const { rows } = await pool.query(
     `INSERT INTO predictions (based_on_image_id, summary, prediction)
      VALUES (NULL, $1::jsonb, $2::jsonb)
@@ -75,6 +157,10 @@ export async function analyzeV2(logger = console) {
         pattern,
         metrics,
         source,
+        reactivation,
+        deviationSignal,
+        reversalSignal,
+        trendDetail,
       }),
       JSON.stringify(prediction),
     ]
@@ -86,28 +172,50 @@ export async function analyzeV2(logger = console) {
     await markPredictedNow(windowId);
   }
 
-  pushAnalytics('analytics/prediction', {
-    window_id: windowId,
+  // WS broadcast
+  try {
+    pushAnalytics('analytics/prediction', {
+      window_id: windowId,
+      pattern,
+      source,
+      prediction,
+      reactivation,
+      deviationSignal,
+      reversalSignal,
+      trendDetail,
+      ts: new Date().toISOString(),
+    });
+  } catch {}
+
+  logger.log?.(`[AnalyzerV2] ✅ Prediction via ${source}:`, {
     pattern,
     source,
+    top: prediction.top3 || prediction.top_candidates?.slice?.(0, 3),
+    reactivation,
+    deviationSignal,
+    reversalSignal,
+  });
+
+  return {
+    window,
+    pattern,
     prediction,
-    ts: new Date().toISOString(),
-  });
-
-  logger.log?.(`[AnalyzerV2] ✅ Prediction generated via ${source}:`, {
-    pattern,
     source,
-    top: prediction.top_candidates?.slice(0, 3),
-  });
-
-  return { window, pattern, prediction, source };
+    reactivation,
+    deviationSignal,
+    reversalSignal,
+    trendDetail,
+  };
 }
 
 export async function handleOutcome(actualResult, prevResult, correct) {
   const w = await maintainAndGetCurrentWindow();
   if (!w) return;
+
   await updateStreak(w.id, { correct });
+
   if (Number.isFinite(prevResult) && Number.isFinite(actualResult)) {
+    // Global transitions
     await pool.query(
       `INSERT INTO number_transitions (from_n, to_n, count, last_seen)
        VALUES ($1, $2, 1, now())
@@ -116,5 +224,37 @@ export async function handleOutcome(actualResult, prevResult, correct) {
                      last_seen = now()`,
       [prevResult, actualResult]
     );
+
+    // Window-aware transitions
+    await pool.query(
+      `INSERT INTO number_transitions_windowed (from_n, to_n, window_idx, count, last_seen)
+       VALUES ($1, $2, $3, 1, now())
+       ON CONFLICT (from_n, to_n, window_idx)
+       DO UPDATE SET count = number_transitions_windowed.count + 1,
+                     last_seen = now()`,
+      [prevResult, actualResult, Number(w.window_idx)]
+    );
+  }
+
+  try {
+    const { rows: pr } = await pool.query(
+      `SELECT (summary->'reactivation'->>'snapshot_id')::bigint AS snapshot_id
+       FROM predictions
+      WHERE window_id = $1
+      ORDER BY id DESC
+      LIMIT 1`,
+      [w.id]
+    );
+    const snapId = Number(pr?.[0]?.snapshot_id);
+    if (Number.isFinite(snapId)) {
+      await pool.query(
+        `INSERT INTO pattern_snapshot_outcomes (snapshot_id, predicted_at, correct)
+       VALUES ($1, now(), $2)`,
+        [snapId, !!correct]
+      );
+      await pool.query(`SELECT fn_update_snapshot_hit_rate($1, $2, $3)`, [snapId, !!correct, 0.2]);
+    }
+  } catch (e) {
+    console.log('error', e);
   }
 }

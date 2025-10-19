@@ -1,5 +1,5 @@
-// src/analytics/analytics.v2.ws.js
 import { WebSocketServer } from 'ws';
+import { pool } from '../config/db.config.js';
 
 import {
   maintainAndGetCurrentWindow,
@@ -27,6 +27,7 @@ import {
   fetchRecentSpins,
   timeBucketsSnapshot,
 } from './analytics.handlers.js';
+import { detectTrendReversal } from '../services/trend.service.js';
 
 const CLIENTS = new Set();
 let wss;
@@ -58,17 +59,53 @@ async function topicV2(topic, params = {}) {
       const w = await maintainAndGetCurrentWindow();
       if (!w) return { error: 'no_window' };
       const s = await fetchWindowState(w.id);
+      let deviationSignal = false;
+      try {
+        const { detectFrequencyDeviation } = await import('../services/deviation.service.js');
+        const dev = await detectFrequencyDeviation();
+        deviationSignal = !!(dev?.deviation || dev?.reversal);
+      } catch {}
       const trig = await shouldTriggerAI({
         windowState: { id: s.id, status: s.status, first_predict_after: s.first_predict_after },
         patternState: { wrong_streak: s.wrong_streak, pattern_code: s.pattern_code },
-        deviationSignal: false,
+        deviationSignal,
       });
       return { window_id: w.id, trigger: trig };
+    }
+    case 'v2/deviation': {
+      try {
+        const { detectFrequencyDeviation } = await import('../services/deviation.service.js');
+        const deviation = await detectFrequencyDeviation();
+        return { deviation };
+      } catch (e) {
+        return { error: e?.message || 'failed to detect deviation' };
+      }
+    }
+    case 'v2/trend': {
+      try {
+        const shortM = pnum(params.shortM, undefined);
+        const longM = pnum(params.longM, undefined);
+        const delta = typeof params.delta === 'number' ? params.delta : undefined;
+        const trend = await detectTrendReversal({ shortM, longM, delta });
+        return { trend };
+      } catch (e) {
+        return { error: e?.message || 'failed to detect trend reversal' };
+      }
+    }
+    case 'v2/observation': {
+      const w = await maintainAndGetCurrentWindow();
+      if (!w) return { error: 'no_window' };
+      const s = await fetchWindowState(w.id);
+      const observing =
+        s.mode === 'observe' || (s.paused_until && new Date(s.paused_until) > new Date());
+      return { window_id: w.id, mode: s.mode || 'normal', observing, paused_until: s.paused_until };
     }
     case 'v2/scoringPreview': {
       const w = await maintainAndGetCurrentWindow();
       if (!w) return { error: 'no_window' };
-      const { pattern_code, scores } = await identifyActivePattern({});
+
+      const { pattern_code } = await identifyActivePattern({});
+
       const { rows } = await fetchRecentSpins(30).then((r) => ({
         rows: r.map((x) => ({ result: x.result })),
       }));
@@ -78,8 +115,6 @@ async function topicV2(topic, params = {}) {
       const ranked = await scoreAndRank(poolNums, {});
       return {
         window_id: w.id,
-        pattern_code,
-        pattern_scores: scores,
         last,
         pool: poolNums,
         ranked,
@@ -90,8 +125,109 @@ async function topicV2(topic, params = {}) {
       const out = await analyzeV2(console);
       return { out };
     }
+    case 'v2/transitions': {
+      const from = pnum(params.from, undefined);
+      const win = pnum(params.window, undefined);
+      if (!Number.isFinite(from)) return { error: 'from required' };
 
-    // optional: bundle fragments reused by dashboards
+      if (Number.isFinite(win)) {
+        const { rows } = await pool.query(
+          `SELECT from_n, to_n, window_idx, count, last_seen
+         FROM number_transitions_windowed
+        WHERE from_n=$1 AND window_idx=$2
+        ORDER BY count DESC, to_n ASC
+        LIMIT 50`,
+          [from, win]
+        );
+        return { rows };
+      } else {
+        const { rows } = await pool.query(
+          `SELECT from_n, to_n, count, last_seen
+         FROM number_transitions
+        WHERE from_n=$1
+        ORDER BY count DESC, to_n ASC
+        LIMIT 50`,
+          [from]
+        );
+        return { rows };
+      }
+    }
+
+    case 'v2/reactivation': {
+      const { rows: sigRows } = await pool.query(`SELECT fn_snapshot_signature_48h(now()) AS sig`);
+      const sig = sigRows?.[0]?.sig || null;
+      if (!sig) return { match: null };
+
+      const { rows: matchRows } = await pool.query(
+        `SELECT snapshot_id, similarity FROM fn_match_pattern_snapshots($1::jsonb, 1)`,
+        [sig]
+      );
+      const best = matchRows?.[0] || null;
+      if (!best) return { match: null };
+
+      const { rows: snapRows } = await pool.query(
+        `SELECT id, start_at, end_at, sample_size, top_pool, hit_rate, created_at
+           FROM pattern_snapshots
+          WHERE id = $1
+          LIMIT 1`,
+        [best.snapshot_id]
+      );
+
+      return {
+        match: {
+          snapshot: snapRows?.[0] || null,
+          similarity: Number(best.similarity),
+        },
+      };
+    }
+
+    case 'v2/status': {
+      const w = await maintainAndGetCurrentWindow();
+      if (!w) return { window: null, gate: { can: false, reason: 'no_window' } };
+
+      const state = await fetchWindowState(w.id);
+
+      let deviation = null;
+      try {
+        const { detectFrequencyDeviation } = await import('../services/deviation.service.js');
+        deviation = await detectFrequencyDeviation();
+      } catch {}
+
+      let trend = null;
+      try {
+        const { detectTrendReversal } = await import('../services/trend.service.js');
+        trend = await detectTrendReversal();
+      } catch {}
+
+      let react = null;
+      try {
+        const { rows: sigRows } = await pool.query(
+          `SELECT fn_snapshot_signature_48h(now()) AS sig`
+        );
+        const sig = sigRows?.[0]?.sig || null;
+        if (sig) {
+          const { rows: matchRows } = await pool.query(
+            `SELECT snapshot_id, similarity FROM fn_match_pattern_snapshots($1::jsonb, 1)`,
+            [sig]
+          );
+          const best = matchRows?.[0] || null;
+          if (best)
+            react = { snapshot_id: Number(best.snapshot_id), similarity: Number(best.similarity) };
+        }
+      } catch {}
+
+      const gate = await canPredict(w.id);
+
+      return {
+        window: { id: w.id, window_idx: w.window_idx, start_at: w.start_at, end_at: w.end_at },
+        mode: state.mode || 'normal',
+        gate,
+        deviation: deviation || {},
+        reversal: trend || {},
+        reactivation: react,
+      };
+    }
+
     case 'v2/coreBundle': {
       const lookback = pnum(params.lookback, 200);
       const [coreStats, gaps_extended, r, color_runs, recent_spins, time_buckets, windows] =

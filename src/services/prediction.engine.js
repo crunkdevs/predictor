@@ -1,3 +1,4 @@
+// services/prediction.engine.js
 import { pool } from '../config/db.config.js';
 import {
   canPredict,
@@ -57,6 +58,35 @@ function normalizeWeights(arr, key = 'score') {
   return arr;
 }
 
+function clamp01(x) {
+  const v = Number(x);
+  if (!Number.isFinite(v)) return 0;
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+const quadKey = (n) => `${parityOf(n)}_${sizeOf(n)}`; // "even_small" | "odd_small" | "even_big" | "odd_big"
+
+async function getFourClassShares(limit = 200) {
+  // Pull recent spins via existing helper to stay consistent
+  const rows = await fetchRecentSpins(Math.max(50, Math.min(500, Number(limit) || 200)));
+  if (!rows?.length) {
+    // neutral shares if nothing to go on
+    return {
+      even_small: 0.25,
+      odd_small: 0.25,
+      even_big: 0.25,
+      odd_big: 0.25,
+    };
+  }
+  const counts = { even_small: 0, odd_small: 0, even_big: 0, odd_big: 0 };
+  for (const r of rows) {
+    const k = `${String(r.result_parity || '').toLowerCase()}_${String(r.result_size || '').toLowerCase()}`;
+    if (counts[k] != null) counts[k] += 1;
+  }
+  const total = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
+  return Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, v / total]));
+}
+
 // ---------- Data access helpers ----------
 
 async function getLastResults(limit = 30) {
@@ -72,6 +102,18 @@ async function getTransitionsFromDB(fromN, topK = 12) {
   const { rows } = await pool.query(
     `SELECT to_n, count FROM number_transitions WHERE from_n = $1 ORDER BY count DESC, to_n ASC LIMIT $2`,
     [fromN, topK]
+  );
+  return rows.map((r) => ({ to: Number(r.to_n), c: Number(r.count) }));
+}
+
+async function getTransitionsWindowed(fromN, windowIdx, topK = 12) {
+  const { rows } = await pool.query(
+    `SELECT to_n, count
+       FROM number_transitions_windowed
+      WHERE from_n = $1 AND window_idx = $2
+      ORDER BY count DESC, to_n ASC
+      LIMIT $3`,
+    [fromN, windowIdx, topK]
   );
   return rows.map((r) => ({ to: Number(r.to_n), c: Number(r.count) }));
 }
@@ -122,12 +164,53 @@ export async function identifyActivePattern(context = {}) {
 
 export async function buildNumberPool({ last, pattern_code, context = {} }) {
   const poolSet = new Set();
+  const TRANSITIONS_MIN_COUNT = Number(process.env.TRANSITIONS_MIN_COUNT || 2);
+
+  let trans = [];
+
+  if (Number.isFinite(context.window_idx)) {
+    trans = await getTransitionsWindowed(last, Number(context.window_idx), 12);
+  }
+
+  if (!trans || trans.length < TRANSITIONS_MIN_COUNT) {
+    trans = await getTransitionsFromDB(last, 12);
+  }
+
+  for (const t of trans) {
+    if (poolSet.size >= POOL_SIZE) break;
+    poolSet.add(t.to);
+  }
+
+  // Reactivation bias (from 48h snapshot) — if present, seed pool with those numbers first
+  const react = context.reactivation || null;
+  const reactOk = react && Number(react.similarity) >= 0.75;
+  const reactPool = Array.isArray(react?.snapshot_top_pool)
+    ? react.snapshot_top_pool
+        .map((n) => Number(n))
+        .filter((n) => Number.isFinite(n) && n >= 0 && n <= 27)
+    : [];
+
+  if (reactOk && reactPool.length) {
+    for (const n of reactPool) {
+      if (poolSet.size >= POOL_SIZE) break;
+      poolSet.add(n);
+    }
+  }
 
   const gapsExt = context.gapsExt ?? (await gapStatsExtended(500));
   const sinceMap = gapsExt?.numbers?.since || {};
 
-  if (Number.isFinite(last)) {
-    const trans = await getTransitionsFromDB(last, 12);
+  if (poolSet.size < POOL_SIZE && Number.isFinite(last)) {
+    // Try window-aware first (if we know window_idx in context)
+    let trans = [];
+    const winIdx = Number.isFinite(context.window_idx) ? Number(context.window_idx) : undefined;
+    if (Number.isFinite(winIdx)) {
+      trans = await getTransitionsWindowed(last, winIdx, 12);
+    }
+    // Fallback to global if sparse
+    if (!trans || trans.length < TRANSITIONS_MIN_COUNT) {
+      trans = await getTransitionsFromDB(last, 12);
+    }
     for (const t of trans) {
       if (poolSet.size >= POOL_SIZE) break;
       poolSet.add(t.to);
@@ -170,6 +253,22 @@ export async function scoreAndRank(pool, context = {}) {
   const runs = context.colorRuns ?? (await recentColorRuns(50));
   const gapsExt = context.gapsExt ?? (await gapStatsExtended(500));
   const ratio = context.ratios ?? (await ratios(200));
+  const fourShares = context.fourShares ?? (await getFourClassShares(200));
+
+  const trend = context.trend || null; // pass from analyzer if desired
+  const toCluster = trend?.color?.to_cluster; // 'Warm' | 'Cool' | 'Neutral'
+  const toSize = trend?.size?.to; // 'small' | 'big'
+
+  // Reactivation context
+  const react = context.reactivation || null;
+  const reactOk = react && Number(react.similarity) >= 0.75;
+  const reactPool = Array.isArray(react?.snapshot_top_pool)
+    ? new Set(
+        react.snapshot_top_pool
+          .map((n) => Number(n))
+          .filter((n) => Number.isFinite(n) && n >= 0 && n <= 27)
+      )
+    : new Set();
 
   const shortColors = tb?.last_10m || {};
   const colorTotals = Object.values(shortColors).reduce((a, b) => a + Number(b || 0), 0) || 1;
@@ -195,17 +294,27 @@ export async function scoreAndRank(pool, context = {}) {
   const oddPct = Number(ratio?.odd_even?.odd_pct ?? NaN);
   const smallPct = Number(ratio?.small_big?.small_pct ?? NaN);
 
+  // Rebalanced weights to accommodate reactivation boost
   const W = {
-    gapPressure: 0.25,
-    streakBreak: 0.2,
-    colorBalance: 0.15,
-    parityRotation: 0.2,
-    sizeRegime: 0.2,
+    gapPressure: Number(process.env.W_GAP_PRESSURE ?? 0.22),
+    streakBreak: Number(process.env.W_STREAK_BREAK ?? 0.18),
+    colorBalance: Number(process.env.W_COLOR_BALANCE ?? 0.14),
+    parityRotation: Number(process.env.W_PARITY_ROTATION ?? 0.18),
+    sizeRegime: Number(process.env.W_SIZE_REGIME ?? 0.18),
+    reactivationBoost: Number(process.env.W_REACTIVATION ?? 0.1),
+    quadParity: Number(process.env.W_QUAD_PARITY ?? 0.08),
+    trendReversal: Number(process.env.W_TREND_REVERSAL ?? 0.06),
   };
+
+  const reactivationGain =
+    reactOk && Number.isFinite(Number(react.similarity))
+      ? clamp01((Number(react.similarity) - 0.7) / 0.3) // 0 at 0.70, 1 at 1.00
+      : 0;
 
   const scored = pool.map((n) => {
     const k = String(n);
     const col = numToColor(n);
+    const qk = quadKey(n); // e.g., "even_small"
 
     const gapP =
       (sinceMap[k] == null ? 1.0 : Math.min(1, Number(sinceMap[k] || 0) / 30)) +
@@ -224,12 +333,30 @@ export async function scoreAndRank(pool, context = {}) {
     const parityScore = Number.isFinite(oddPct) ? 1 - Math.abs(oddPct - 50) / 50 : 0.5;
     const sizeScore = Number.isFinite(smallPct) ? 1 - Math.abs(smallPct - 50) / 50 : 0.5;
 
+    const reactScore = reactPool.has(n) ? reactivationGain : 0;
+
+    const target = 0.25;
+    const currentShare = clamp01(fourShares?.[qk]);
+    const quadScore = Math.max(0, target - currentShare) / target;
+
+    const colorTrendScore = toCluster
+      ? (toCluster === 'Warm' && (col === 'Red' || col === 'Orange' || col === 'Pink')) ||
+        (toCluster === 'Cool' && (col === 'Dark Blue' || col === 'Sky Blue' || col === 'Green')) ||
+        (toCluster === 'Neutral' && col === 'Gray')
+        ? 1
+        : 0
+      : 0;
+    const sizeTrendScore = toSize ? (sizeOf(n) === toSize ? 1 : 0) : 0;
+
     const score =
       W.gapPressure * gapP +
       W.streakBreak * streakScore +
       W.colorBalance * colorBal +
       W.parityRotation * parityScore +
-      W.sizeRegime * sizeScore;
+      W.sizeRegime * sizeScore +
+      W.reactivationBoost * reactScore +
+      W.quadParity * quadScore +
+      W.trendReversal * (0.6 * colorTrendScore + 0.4 * sizeTrendScore);
 
     return { n, score, color: col, parity: parityOf(n), size: sizeOf(n) };
   });
@@ -239,7 +366,6 @@ export async function scoreAndRank(pool, context = {}) {
 
   return scored;
 }
-
 // ---------- AI Trigger rules ----------
 
 export async function shouldTriggerAI({ windowState, patternState, deviationSignal }) {

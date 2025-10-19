@@ -1,9 +1,15 @@
+// services/window.service.js
 import { pool } from '../config/db.config.js';
 
 const TZ = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
 const FIRST_PREDICT_DELAY_MIN = Number(process.env.FIRST_PREDICT_DELAY_MIN || 20);
 const PAUSE_AFTER_WRONGS = Number(process.env.PRED_PAUSE_AFTER_WRONGS || 3);
 const WRONG_PAUSE_MIN = Number(process.env.PRED_PAUSE_MIN || 10);
+
+// --- Stabilization thresholds (can be tuned via env if you like)
+const OBSERVE_LOOKBACK = Number(process.env.OBSERVE_LOOKBACK || 30);
+const OBSERVE_MAX_RUN = Number(process.env.OBSERVE_MAX_RUN || 3);
+const OBSERVE_MIN_COLORS = Number(process.env.OBSERVE_MIN_COLORS || 5);
 
 export async function ensureWindowsForDay(dayDate) {
   const { rows } = await pool.query(
@@ -64,6 +70,53 @@ export async function getOrCreatePatternState(windowId) {
   return ins[0];
 }
 
+// --- NEW: stabilization check (simple & cheap)
+async function isStabilized(lookback = OBSERVE_LOOKBACK) {
+  const { rows } = await pool.query(
+    `
+    WITH recent AS (
+      SELECT screen_shot_time, result_color
+      FROM v_spins
+      ORDER BY screen_shot_time DESC
+      LIMIT $1
+    ),
+    base AS (
+      SELECT
+        screen_shot_time,
+        result_color,
+        CASE
+          WHEN result_color = LAG(result_color) OVER (ORDER BY screen_shot_time DESC) THEN 0
+          ELSE 1
+        END AS is_break
+      FROM recent
+    ),
+    w1 AS (
+      SELECT
+        screen_shot_time,
+        result_color,
+        SUM(is_break) OVER (ORDER BY screen_shot_time DESC
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS grp
+      FROM base
+    ),
+    w2 AS (
+      SELECT
+        result_color,
+        COUNT(*) OVER (PARTITION BY grp) AS run_length
+      FROM w1
+    )
+    SELECT
+      COALESCE(MAX(run_length),0)   AS max_run,
+      COALESCE(COUNT(DISTINCT result_color),0) AS colors_used
+    FROM w2;
+  `,
+    [Math.max(10, Number(lookback) || OBSERVE_LOOKBACK)]
+  );
+  const r = rows[0] || { max_run: 0, colors_used: 0 };
+  const max_run = Number(r.max_run || 0);
+  const colors_used = Number(r.colors_used || 0);
+  return max_run <= OBSERVE_MAX_RUN && colors_used >= OBSERVE_MIN_COLORS;
+}
+
 export async function fetchWindowState(windowId) {
   const row = await getWindowById(windowId);
   if (!row) return null;
@@ -82,7 +135,28 @@ export async function fetchWindowState(windowId) {
     correct_streak: Number(ps?.correct_streak || 0),
     paused_until: ps?.paused_until || null,
     last_predicted_at: ps?.last_predicted_at || null,
+    // --- NEW: expose mode
+    mode: ps?.mode || 'normal',
   };
+}
+
+// --- NEW: helpers to flip modes
+export async function setMode(windowId, mode) {
+  await pool.query(`UPDATE window_pattern_state SET mode=$2, updated_at=now() WHERE window_id=$1`, [
+    windowId,
+    String(mode),
+  ]);
+}
+
+export async function enterObserveMode(windowId) {
+  await setMode(windowId, 'observe');
+  return 'observe';
+}
+
+export async function tryExitObserveIfStabilized(windowId) {
+  const ok = await isStabilized();
+  if (ok) await setMode(windowId, 'normal');
+  return ok;
 }
 
 export async function canPredict(windowId) {
@@ -97,8 +171,25 @@ export async function canPredict(windowId) {
   if (now < new Date(ws.first_predict_after)) {
     return { can: false, reason: 'before_first_predict_after', until: ws.first_predict_after };
   }
+
+  // --- NEW: mode transitions & gating
+  // If paused_until has expired and mode is still 'paused' -> move to 'observe'
+  if (ws.paused_until && now >= new Date(ws.paused_until) && ws.mode === 'paused') {
+    await setMode(windowId, 'observe');
+    // refresh local state
+    ws.mode = 'observe';
+  }
+
+  // Block predictions in 'paused'
   if (ws.paused_until && now < new Date(ws.paused_until)) {
     return { can: false, reason: 'paused', until: ws.paused_until };
+  }
+
+  // In observe: only allow predictions once stabilized
+  if (ws.mode === 'observe') {
+    const ok = await tryExitObserveIfStabilized(windowId);
+    if (!ok) return { can: false, reason: 'observe' };
+    // if stabilized, fall-through with mode='normal'
   }
 
   return { can: true };
@@ -109,7 +200,7 @@ export async function pausePattern(windowId, minutes = WRONG_PAUSE_MIN) {
   const until = new Date(Date.now() + ms).toISOString();
   await pool.query(
     `UPDATE window_pattern_state
-       SET paused_until = $2, updated_at = now()
+       SET paused_until = $2, mode='paused', updated_at = now()
      WHERE window_id = $1`,
     [windowId, until]
   );
@@ -143,6 +234,7 @@ export async function updateStreak(windowId, { correct }) {
 
   if (wrong >= PAUSE_AFTER_WRONGS) {
     await pausePattern(windowId, WRONG_PAUSE_MIN);
+    // Note: mode is set to 'paused' in pausePattern(); after expiry canPredict() shifts to 'observe'
   }
 
   return updated;
