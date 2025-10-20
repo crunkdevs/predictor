@@ -121,7 +121,8 @@ async function getTransitionsWindowed(fromN, windowIdx, topK = 12) {
 // ---------- Pattern identification ----------
 
 export async function identifyActivePattern(context = {}) {
-  const lookback = Number(process.env.PRED_LOOKBACK || 200);
+  const _lb = process.env.PRED_LOOKBACK ?? 200;
+  const lookback = String(_lb).toLowerCase() === 'all' ? 200 : Number(_lb) || 200;
 
   const ratio = context.ratios ?? (await ratios(Math.min(lookback, 200)));
   const gapsExt = context.gapsExt ?? (await gapStatsExtended(Math.max(lookback, 500)));

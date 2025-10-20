@@ -268,12 +268,14 @@ export async function gapStats(lookback = 500) {
 }
 
 export async function ratios(lookback = 50) {
-  const { rows } = await pool.query('SELECT fn_ratios_json($1) AS j', [lookback]);
+  const lb = sanitizeLookback(lookback, 50);
+  const { rows } = await pool.query('SELECT fn_ratios_json($1) AS j', [lb]);
   return rows[0]?.j || { lookback };
 }
 
 export async function numberPatterns(lookback = 200) {
-  const { rows } = await pool.query('SELECT fn_number_patterns_json($1) AS j', [lookback]);
+  const lb = sanitizeLookback(lookback, 200);
+  const { rows } = await pool.query('SELECT fn_number_patterns_json($1) AS j', [lb]);
   return rows[0]?.j || { lookback };
 }
 
@@ -689,7 +691,8 @@ export async function recentPredictionLogsRaw({ limit = 25 } = {}) {
 }
 
 export async function gapStatsExtended(lookback = 500) {
-  const { rows } = await pool.query('SELECT fn_gap_stats_ext_json($1) AS j', [lookback]);
+  const lb = sanitizeLookback(lookback, 500);
+  const { rows } = await pool.query('SELECT fn_gap_stats_ext_json($1) AS j', [lb]);
   const j = rows[0]?.j || { lookback, numbers: {}, colors: {} };
 
   const unseen = (v) => (v == null ? null : v > lookback ? null : v);

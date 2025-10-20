@@ -62,7 +62,8 @@ export async function analyzeLatestUnprocessed(logger = console) {
   }
 
   // ---- Slim V2 bundle (doc-compliant) ----
-  const lookback = Number(process.env.PRED_LOOKBACK || 200);
+  const _lb = process.env.PRED_LOOKBACK ?? 200;
+  const lookback = String(_lb).toLowerCase() === 'all' ? 'all' : Number(_lb) || 200;
   const topk = Number(process.env.PRED_TOPK || 5);
 
   const [coreStats, gaps_extended, r, color_runs, time_buckets] = await Promise.all([

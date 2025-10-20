@@ -46,7 +46,9 @@ export async function analyzeV2(logger = console) {
 
     if (sig) {
       const { rows: matchRows } = await pool.query(
-        `SELECT snapshot_id, similarity FROM fn_match_pattern_snapshots($1::jsonb, 1)`,
+        `SELECT m.snapshot_id, m.similarity
+     FROM fn_match_pattern_snapshots($1::jsonb, 1)
+          AS m(snapshot_id bigint, similarity numeric)`,
         [sig]
       );
       const best = matchRows?.[0] || null;
