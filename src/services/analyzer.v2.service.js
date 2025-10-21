@@ -252,22 +252,27 @@ export async function handleOutcome(actualResult, prevResult, correct) {
 
   try {
     const { rows: pr } = await pool.query(
-      `SELECT (summary->'reactivation'->>'snapshot_id')::bigint AS snapshot_id
+      `SELECT (summary->'reactivation'->>'snapshot_id') AS snapshot_id_txt
        FROM predictions
       WHERE window_id = $1
       ORDER BY id DESC
       LIMIT 1`,
       [w.id]
     );
-    const snapId = Number(pr?.[0]?.snapshot_id);
-    if (Number.isFinite(snapId)) {
-      await pool.query(
-        `INSERT INTO pattern_snapshot_outcomes (snapshot_id, predicted_at, correct)
-       VALUES ($1, now(), $2)`,
-        [snapId, !!correct]
-      );
-      await pool.query(`SELECT fn_update_snapshot_hit_rate($1, $2, $3)`, [snapId, !!correct, 0.2]);
-    }
+
+    const raw = pr?.[0]?.snapshot_id_txt;
+    if (raw == null) return;
+
+    const snapId = Number(raw);
+    if (!Number.isFinite(snapId) || snapId <= 0) return;
+
+    await pool.query(
+      `INSERT INTO pattern_snapshot_outcomes (snapshot_id, predicted_at, correct)
+     VALUES ($1, now(), $2)`,
+      [snapId, !!correct]
+    );
+
+    await pool.query(`SELECT fn_update_snapshot_hit_rate($1, $2, $3)`, [snapId, !!correct, 0.2]);
   } catch (e) {
     console.log('error', e);
   }
