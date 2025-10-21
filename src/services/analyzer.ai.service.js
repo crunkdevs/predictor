@@ -47,6 +47,14 @@ export async function analyzeLatestUnprocessed(logger = console) {
           } catch (e) {
             logger.warn?.('[AIAnalyzer] processOutcomeForImage failed:', e?.message || e);
           }
+
+          try {
+            const { analyzeV2 } = await import('./analyzer.v2.service.js');
+            logger.log?.('[AIAnalyzer] Triggering analyzeV2 due to new image stats');
+            await analyzeV2(logger);
+          } catch (e) {
+            logger.warn?.('[AIAnalyzer] analyzeV2 trigger failed:', e?.message || e);
+          }
         } else {
           logger.warn?.(`[AIAnalyzer] parsed but missing "result" for image=${id}`, parsed);
         }
