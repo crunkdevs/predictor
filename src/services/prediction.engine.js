@@ -482,7 +482,7 @@ export async function shouldTriggerAI({
 // ---------- Main: produce local prediction (no AI) ----------
 
 export async function localPredict({ windowId, context = {} }) {
-  const gate = await canPredict(windowId);
+  const gate = await canPredict(windowId, { channel: 'local' });
   if (!gate.can) return { allowed: false, reason: gate.reason, until: gate.until };
 
   const seq = context.seq ?? (await getLastResults(30));

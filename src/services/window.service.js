@@ -3,8 +3,8 @@ import { pool } from '../config/db.config.js';
 
 const TZ = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
 const FIRST_PREDICT_DELAY_MIN = Number(process.env.FIRST_PREDICT_DELAY_MIN || 20);
-const PAUSE_AFTER_WRONGS = Number(process.env.PRED_PAUSE_AFTER_WRONGS || 3);
 const WRONG_PAUSE_MIN = Number(process.env.PRED_PAUSE_MIN || 10);
+const AI_STREAK_MAX_WRONGS = Number(process.env.AI_STREAK_MAX_WRONGS || 3);
 
 // --- Stabilization thresholds (can be tuned via env if you like)
 const OBSERVE_LOOKBACK = Number(process.env.OBSERVE_LOOKBACK || 30);
@@ -181,7 +181,7 @@ export async function tryExitObserveIfStabilized(windowId) {
   return ok;
 }
 
-export async function canPredict(windowId) {
+export async function canPredict(windowId, { channel = 'local' } = {}) {
   const ws = await fetchWindowState(windowId);
   if (!ws) return { can: false, reason: 'no_window' };
 
@@ -204,7 +204,9 @@ export async function canPredict(windowId) {
 
   // Block predictions in 'paused'
   if (ws.paused_until && now < new Date(ws.paused_until)) {
-    return { can: false, reason: 'paused', until: ws.paused_until };
+    if (channel === 'ai') {
+      return { can: false, reason: 'paused', until: ws.paused_until };
+    }
   }
 
   // In observe: only allow predictions once stabilized
@@ -229,7 +231,7 @@ export async function pausePattern(windowId, minutes = WRONG_PAUSE_MIN) {
   return until;
 }
 
-export async function updateStreak(windowId, { correct }) {
+export async function updateStreak(windowId, { correct, source = 'local' }) {
   const ps = await getOrCreatePatternState(windowId);
   let wrong = Number(ps.wrong_streak || 0);
   let corr = Number(ps.correct_streak || 0);
@@ -254,11 +256,26 @@ export async function updateStreak(windowId, { correct }) {
 
   const updated = rows[0];
 
-  if (wrong >= PAUSE_AFTER_WRONGS) {
-    await pausePattern(windowId, WRONG_PAUSE_MIN);
-    await deactivatePattern(windowId);
-    await setActivePattern(windowId, 'Unknown');
-    // Note: mode is set to 'paused' in pausePattern(); after expiry canPredict() shifts to 'observe'
+  if (source === 'ai' && correct === false) {
+    const { rows: aiRows } = await pool.query(
+      `SELECT COALESCE((prediction->>'correct')::boolean, NULL) AS correct
+       FROM predictions
+      WHERE source='ai' AND window_id=$1
+      ORDER BY id DESC
+      LIMIT 10`,
+      [windowId]
+    );
+    let aiWrongStreak = 1;
+    for (const r of aiRows) {
+      if (r.correct === false) {
+        aiWrongStreak++;
+      } else {
+        break;
+      }
+    }
+    if (aiWrongStreak >= AI_STREAK_MAX_WRONGS) {
+      await pausePattern(windowId, WRONG_PAUSE_MIN);
+    }
   }
 
   return updated;

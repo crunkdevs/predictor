@@ -44,7 +44,7 @@ export async function processOutcomeForImage(imageId) {
 
   // 4) get latest prediction for that window, made before this spin ts
   const { rows: predRows } = await pool.query(
-    `SELECT id, prediction, summary
+    `SELECT id, prediction, summary, source
        FROM predictions
       WHERE window_id = $1
         AND created_at < $2
@@ -81,5 +81,5 @@ export async function processOutcomeForImage(imageId) {
   );
 
   // 8) propagate learning hooks (streaks, cooldowns, transitions, snapshot hit-rate EMA)
-  await handleOutcome(actual, prev, correct);
+  await handleOutcome(actual, prev, correct, pred.source || 'local');
 }

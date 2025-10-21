@@ -28,7 +28,7 @@ export async function analyzeV2(logger = console) {
   }
 
   const { id: windowId } = window;
-  const can = await canPredict(windowId);
+  const can = await canPredict(windowId, { channel: 'local' });
   if (!can.can) {
     logger.log?.(`[AnalyzerV2] ⏸️ Prediction blocked (${can.reason}) until ${can.until}`);
     return null;
@@ -130,9 +130,14 @@ export async function analyzeV2(logger = console) {
 
   try {
     if (aiGate?.trigger) {
-      logger.log?.('[AnalyzerV2] 🤖 AI Trigger activated.');
-      prediction = await analyzeLatestUnprocessed(logger);
-      source = 'ai';
+      const aiCan = await canPredict(windowId, { channel: 'ai' });
+      if (!aiCan.can) {
+        logger.log?.('[AnalyzerV2] AI gated:', aiCan.reason, aiCan.until || '');
+      } else {
+        logger.log?.('[AnalyzerV2] 🤖 AI Trigger activated.');
+        prediction = await analyzeLatestUnprocessed(logger);
+        source = 'ai';
+      }
     } else {
       prediction = await localPredict({
         windowId,
@@ -222,11 +227,11 @@ export async function analyzeV2(logger = console) {
   };
 }
 
-export async function handleOutcome(actualResult, prevResult, correct) {
+export async function handleOutcome(actualResult, prevResult, correct, source = 'local') {
   const w = await maintainAndGetCurrentWindow();
   if (!w) return;
 
-  await updateStreak(w.id, { correct });
+  await updateStreak(w.id, { correct, source });
 
   if (Number.isFinite(prevResult) && Number.isFinite(actualResult)) {
     // Global transitions
