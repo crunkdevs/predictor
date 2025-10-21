@@ -9,7 +9,7 @@ import {
 } from './window.service.js';
 import { refreshAnalyticsMaterializedViews } from '../analytics/analytics.handlers.js';
 
-const CRON_SCHEDULE = process.env.CRON_SCHEDULE_V2 || '*/60 * * * * *';
+const CRON_SCHEDULE = process.env.CRON_SCHEDULE_V2 || '0 * * * * *';
 const LOCK_KEY = Number(process.env.SCHEDULER_LOCK_KEY || 42843);
 
 async function withPgLock(lockKey, fn, logger = console) {
