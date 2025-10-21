@@ -5,9 +5,10 @@ import { getImageBase64 } from './image.base64.service.js';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function parseGameScreenshot(imageId) {
-  const base64 = await getImageBase64(imageId);
+  // const base64 = await getImageBase64(imageId);
+  const { base64, mime } = await getImageBase64(imageId);
 
-  const imageUrl = `data:image/png;base64,${base64}`;
+  const imageUrl = `data:${mime};base64,${base64}`;
 
   const resp = await client.responses.create({
     model: process.env.IMG_PARSE_MODEL || 'gpt-4o-mini',
