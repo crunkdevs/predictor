@@ -124,36 +124,51 @@ export async function analyzeV2(logger = console) {
     reversalSignal,
   });
 
-  // Generate prediction
   let prediction = null;
   let source = 'local';
+  const baseContext = {
+    window_idx: Number(window.window_idx),
+    ...(trendDetail ? { trend: trendDetail } : {}),
+    ...(reactivation
+      ? {
+          reactivation: {
+            similarity: reactivation.similarity,
+            snapshot_top_pool: reactivation.snapshot_top_pool,
+          },
+        }
+      : {}),
+  };
 
   try {
     if (aiGate?.trigger) {
+      // AI requested → check AI channel gate
       const aiCan = await canPredict(windowId, { channel: 'ai' });
-      if (!aiCan.can) {
-        logger.log?.('[AnalyzerV2] AI gated:', aiCan.reason, aiCan.until || '');
-      } else {
+      if (aiCan.can) {
         logger.log?.('[AnalyzerV2] 🤖 AI Trigger activated.');
         prediction = await analyzeLatestUnprocessed(logger);
         source = 'ai';
+      } else {
+        logger.log?.('[AnalyzerV2] AI gated:', aiCan.reason, aiCan.until || '');
+        // 🔁 FALL BACK TO LOCAL
+        const lp = await localPredict({ windowId, context: baseContext });
+        if (lp?.allowed) {
+          prediction = lp;
+          source = 'local';
+        } else {
+          logger.log?.('[AnalyzerV2] Local gated:', lp?.reason, lp?.until || '');
+          return null; // nothing to do this tick
+        }
       }
     } else {
-      prediction = await localPredict({
-        windowId,
-        context: {
-          window_idx: Number(window.window_idx),
-          ...(trendDetail ? { trend: trendDetail } : {}),
-          ...(reactivation
-            ? {
-                reactivation: {
-                  similarity: reactivation.similarity,
-                  snapshot_top_pool: reactivation.snapshot_top_pool,
-                },
-              }
-            : {}),
-        },
-      });
+      // No AI trigger → go local
+      const lp = await localPredict({ windowId, context: baseContext });
+      if (lp?.allowed) {
+        prediction = lp;
+        source = 'local';
+      } else {
+        logger.log?.('[AnalyzerV2] Local gated:', lp?.reason, lp?.until || '');
+        return null;
+      }
     }
   } catch (e) {
     logger.error?.('[AnalyzerV2] Prediction generation failed', e);
