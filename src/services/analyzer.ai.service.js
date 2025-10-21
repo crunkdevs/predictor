@@ -17,7 +17,6 @@ import {
 } from '../models/stats.model.js';
 
 import { parseGameScreenshot } from './image-info-extract.service.js';
-
 import { processOutcomeForImage } from './outcome.service.js';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -28,40 +27,43 @@ const TEMP = Number(process.env.PRED_TEMPERATURE || 0.3);
 export async function analyzeLatestUnprocessed(logger = console) {
   logger.log?.('[AIAnalyzer] 🧩 Triggered via window/pattern deviation');
 
-  // Pre-ingest any latest unprocessed image
   try {
     const ids = await latestUnprocessedImages(1);
     if (ids.length) {
       const id = ids[0];
       if (!(await hasStatsForImage(id))) {
         const parsed = await parseGameScreenshot(id);
+
         if (parsed?.result != null) {
           await insertImageStats({
             imageId: id,
             numbers: parsed.numbers,
             result: parsed.result,
           });
-          logger.log?.(`[AIAnalyzer] Ingested image=${id} into image_stats`);
+          logger.log?.(`[AIAnalyzer] Ingested image=${id} into image_stats`, parsed);
+
           try {
             await processOutcomeForImage(id);
           } catch (e) {
             logger.warn?.('[AIAnalyzer] processOutcomeForImage failed:', e?.message || e);
           }
+        } else {
+          logger.warn?.(`[AIAnalyzer] parsed but missing "result" for image=${id}`, parsed);
         }
+      } else {
+        logger.log?.(`[AIAnalyzer] image=${id} already has stats – skipping`);
       }
     }
   } catch (e) {
     logger.warn?.('[AIAnalyzer] pre-ingest skipped:', e?.message || e);
   }
 
-  // Anchor image to base analytics on
   const anchor = await getLatestAnchorImageId();
   if (!anchor) {
     logger.warn?.('[AIAnalyzer] No anchor image found.');
     return null;
   }
 
-  // ---- Slim V2 bundle (doc-compliant) ----
   const _lb = process.env.PRED_LOOKBACK ?? 200;
   const lookback = String(_lb).toLowerCase() === 'all' ? 'all' : Number(_lb) || 200;
   const topk = Number(process.env.PRED_TOPK || 5);
@@ -106,19 +108,25 @@ Guidelines:
   };
 
   const resp = await client.responses.create(payload);
-  const raw = resp.output_text?.trim() || resp.output?.[0]?.content?.[0]?.text?.trim();
+
+  const raw =
+    resp.output_text?.trim() ??
+    resp.output?.[0]?.content?.find?.((c) => typeof c.text === 'string')?.text?.trim();
+
   if (!raw) throw new Error('Empty model output');
 
   let out;
   try {
     out = JSON.parse(raw);
   } catch {
-    const m = raw.match(/\{[\s\S]*\}$/);
+    const m = raw.match(/\{[\s\S]*\}/);
     if (m) out = JSON.parse(m[0]);
     else throw new Error('Invalid JSON from model');
   }
 
-  const nums = (out.predicted_numbers || []).map((n) => Number(n)).filter((n) => n >= 0 && n <= 27);
+  const nums = (out.predicted_numbers || [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n) && n >= 0 && n <= 27);
 
   const conf = Number(out.confidence || 0.5);
   const len = Math.max(1, nums.length);

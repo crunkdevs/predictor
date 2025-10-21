@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 import { getImages, getImageById, insertOrGetImage } from '../models/image.model.js';
-import { analyzeLatestUnprocessed } from '../services/analyzer.service.js';
+import { analyzeLatestUnprocessed } from '../services/analyzer.ai.service.js';
 
 function ok(res, data) {
   return res.json({ ok: true, ...data });
@@ -60,9 +60,11 @@ export async function uploadB64(req, res) {
       buffer: buf,
     });
 
-    analyzeLatestUnprocessed().catch((e) =>
-      console.error('[uploadB64] analyze trigger failed:', e?.message || e)
-    );
+    setImmediate(() => {
+      analyzeLatestUnprocessed().catch((e) =>
+        console.error('[uploadB64] analyze trigger failed:', e?.message || e)
+      );
+    });
 
     return ok(res, { image: row, inserted });
   } catch (e) {
