@@ -16,7 +16,6 @@ import { pushAnalytics } from '../analytics/analytics.ws.js';
 import { analyzeLatestUnprocessed } from './analyzer.ai.service.js';
 import { detectFrequencyDeviation } from './deviation.service.js';
 import { detectTrendReversal } from './trend.service.js';
-import { insertPredictionLog } from '../models/prediction-logs.model.js';
 
 export async function analyzeV2(logger = console) {
   const now = new Date();
@@ -205,19 +204,6 @@ export async function analyzeV2(logger = console) {
   if (predId) {
     await attachPredictionWindow(predId, windowId, source);
     await markPredictedNow(windowId);
-
-    const { rows: latest } = await pool.query(
-      `SELECT image_id FROM v_spins ORDER BY screen_shot_time DESC LIMIT 1`
-    );
-    const latestImageId = latest?.[0]?.image_id ?? null;
-
-    await insertPredictionLog({
-      basedOnImageId: latestImageId,
-      predictedNumbers: Array.isArray(prediction?.top3)
-        ? prediction.top3
-        : (prediction.top?.map((t) => t.result) ?? []),
-      confidence: prediction?.confidence ?? null,
-    });
   }
 
   // WS broadcast
