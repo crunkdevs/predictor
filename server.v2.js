@@ -4,7 +4,7 @@ import http from 'http';
 
 import { initSchema } from './src/config/db.config.js';
 import imageRoutes from './src/routes/image.route.js';
-import cors from 'cors';
+import analyticsV2Routes from './src/routes/analytics.v2.route.js';
 
 import {
   applyAdvancedAnalyticsSchema,
@@ -14,6 +14,7 @@ import {
 import { startSchedulerV2 } from './src/services/scheduler.v2.service.js';
 import { ensureTodayWindows, closeExpiredWindows } from './src/services/window.service.js';
 import { setupAnalyticsV2WS } from './src/analytics/analytics.v2.ws.js';
+import cors from 'cors';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -23,8 +24,14 @@ app.use(express.urlencoded({ extended: true }));
 
 app.get('/health', (_req, res) => res.status(200).send('ok'));
 
+app.use(
+  cors({
+    origin: [/^http:\/\/localhost:(3000|5173)$/],
+    credentials: true,
+  })
+);
 app.use('/api', imageRoutes);
-app.use(cors({ origin: [/^http:\/\/localhost:(3000|5173)$/], credentials: true }));
+app.use('/api/analytics', analyticsV2Routes);
 
 await initSchema();
 await applyStatsSchema();
