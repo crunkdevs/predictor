@@ -13,6 +13,7 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.19.2",
     "fast-glob": "^3.3.2",
