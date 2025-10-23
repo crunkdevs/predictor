@@ -26,7 +26,7 @@ app.get('/health', (_req, res) => res.status(200).send('ok'));
 
 app.use(
   cors({
-    origin: [/^http:\/\/localhost:(3000|5173)$/],
+    origin: [/^https?:\/\/(www\.)?crm\.ae\.org$/, /^http:\/\/localhost:(3000|5173)$/],
     credentials: true,
   })
 );
