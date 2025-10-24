@@ -224,7 +224,7 @@ export async function analyzeV2(logger = console) {
   logger.log?.(`[AnalyzerV2] ✅ Prediction via ${source}:`, {
     pattern,
     source,
-    top: prediction.top3 || prediction.top_candidates?.slice?.(0, 3),
+    top: prediction.top5 || prediction.top_candidates?.slice?.(0, 5),
     reactivation,
     deviationSignal,
     reversalSignal,

@@ -135,7 +135,7 @@ async function topicV2(topic, params = {}) {
         last,
         pool: poolNums,
         ranked,
-        top3: ranked.slice(0, 3).map((r) => r.n),
+        top5: ranked.slice(0, 5).map((r) => r.n),
       };
     }
     case 'v2/runAnalyzeTick': {

@@ -90,7 +90,7 @@ export async function analyzeLatestUnprocessed(logger = console) {
 You are a roulette analytics assistant.
 Predict the most probable next number (0-27) using JSON only:
 {
-  "predicted_numbers": [top3],
+  "predicted_numbers": [top5],
   "confidence": number(0-1)
 }
 

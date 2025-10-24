@@ -97,7 +97,7 @@ export function startSchedulerV2(logger = console) {
           window_id: out.window?.id,
           pattern: out.pattern,
           source: out.source,
-          top: out.prediction?.top3 || out.prediction?.top_candidates?.slice?.(0, 3),
+          top: out.prediction?.top5 || out.prediction?.top_candidates?.slice?.(0, 3),
         });
       },
       logger

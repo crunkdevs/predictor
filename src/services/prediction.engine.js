@@ -493,7 +493,7 @@ export async function localPredict({ windowId, context = {} }) {
   const pool = await buildNumberPool({ last, pattern_code, context });
   const ranked = await scoreAndRank(pool, context);
 
-  const top3 = ranked.slice(0, 3).map((r) => r.n);
+  const top5 = ranked.slice(0, 5).map((r) => r.n);
 
   return {
     allowed: true,
@@ -502,14 +502,14 @@ export async function localPredict({ windowId, context = {} }) {
     last,
     pool,
     ranked,
-    top3,
+    top5,
   };
 }
 
 // ---------- Feedback hooks ----------
 
-export async function onOutcome({ windowId, predictedTop3, actual }) {
-  const correct = Array.isArray(predictedTop3) && predictedTop3.includes(Number(actual));
+export async function onOutcome({ windowId, predictedTop5, actual }) {
+  const correct = Array.isArray(predictedTop5) && predictedTop5.includes(Number(actual));
 
   const ps = await getOrCreatePatternState(windowId);
   const updated = await updateStreak(windowId, { correct });

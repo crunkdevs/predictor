@@ -61,14 +61,14 @@ export async function processOutcomeForImage(imageId) {
 
   // 6) extract predicted top candidates
   const pj = pred.prediction || {};
-  // supported shapes: { top3: [..] } OR { top_candidates: [{result,prob}, ...] }
-  let top3 = Array.isArray(pj.top3) ? pj.top3.map(Number) : null;
-  if (!top3 || !top3.length) {
+  // supported shapes: { top5: [..] } OR { top_candidates: [{result,prob}, ...] }
+  let top5 = Array.isArray(pj.top5) ? pj.top5.map(Number) : null;
+  if (!top5 || !top5.length) {
     const cand = Array.isArray(pj.top_candidates) ? pj.top_candidates : [];
-    top3 = cand.slice(0, 3).map((c) => Number(c.result));
+    top5 = cand.slice(0, 5).map((c) => Number(c.result));
   }
 
-  const correct = Array.isArray(top3) && top3.includes(actual);
+  const correct = Array.isArray(top5) && top5.includes(actual);
 
   // 7) mark prediction JSON so we never re-process this same prediction (idempotent)
   await pool.query(
