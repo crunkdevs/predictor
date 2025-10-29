@@ -35,6 +35,48 @@ const ok = (res, data) => res.json({ ok: true, ...data });
 const bad = (res, code, msg) => res.status(code).json({ ok: false, error: msg });
 const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
+// controllers/analytics.v2.controller.js
+export async function reversalBias(req, res) {
+  try {
+    const win = Number(req.query.window ?? req.query.w ?? -1);
+    if (!(win >= 0 && win <= 11)) return res.status(400).json({ ok: false, error: 'window 0..11' });
+    const { getHistoricalReversalBias } = await import('../services/trend.bias.service.js');
+    const bias = await getHistoricalReversalBias(win);
+    return res.json({ ok: true, window_idx: win, bias });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || 'failed' });
+  }
+}
+
+export async function windowAccuracy(req, res) {
+  try {
+    const days = Math.max(1, Math.min(90, Number(req.query.days || 30)));
+    const q = `
+      SELECT
+        w.window_idx,
+        COUNT(*) FILTER (WHERE (p.prediction ? 'correct')) AS evaluated,
+        COUNT(*) FILTER (WHERE (p.prediction->>'correct')::boolean IS TRUE) AS correct,
+        COUNT(*) FILTER (WHERE (p.prediction->>'correct')::boolean IS FALSE) AS wrong,
+        ROUND(
+          100.0 *
+          COUNT(*) FILTER (WHERE (p.prediction->>'correct')::boolean IS TRUE)
+          / NULLIF(COUNT(*) FILTER (WHERE (p.prediction ? 'correct')), 0),
+          2
+        ) AS accuracy_pct
+      FROM predictions p
+      JOIN windows w ON w.id = p.window_id
+      WHERE p.created_at >= now() - ($1 || ' days')::interval
+      GROUP BY w.window_idx
+      ORDER BY w.window_idx;
+    `;
+    const { rows } = await pool.query(q, [days]);
+    res.json({ ok: true, days, rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+}
+
 /* -------------------------------------------------------
  * WINDOWS / STATE
  * ----------------------------------------------------- */

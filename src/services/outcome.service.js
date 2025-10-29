@@ -80,6 +80,8 @@ export async function processOutcomeForImage(imageId) {
     [!!correct, imageId, pred.id]
   );
 
-  // 8) propagate learning hooks (streaks, cooldowns, transitions, snapshot hit-rate EMA)
-  await handleOutcome(actual, prev, correct, pred.source || 'local');
+  await handleOutcome(actual, prev, correct, pred.source || 'local', {
+    windowId,
+    spinTs: ts,
+  });
 }

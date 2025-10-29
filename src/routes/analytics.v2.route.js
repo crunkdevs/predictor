@@ -30,4 +30,8 @@ router.get('/v2/status', v2.statusSummary);
 
 router.post('/v2/transitions/backfill', v2.backfillWindowedTransitions);
 
+router.get('/v2/accuracy/windows', v2.windowAccuracy);
+
+router.get('/v2/trend/reversal-bias', v2.reversalBias);
+
 export default router;
