@@ -167,16 +167,17 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
   const poolSet = new Set();
   const TRANSITIONS_MIN_COUNT = Number(process.env.TRANSITIONS_MIN_COUNT || 2);
 
+  // Get transitions (window-aware first, fallback to global)
   let trans = [];
-
-  if (Number.isFinite(context.window_idx)) {
+  if (Number.isFinite(context.window_idx) && Number.isFinite(last)) {
     trans = await getTransitionsWindowed(last, Number(context.window_idx), 12);
   }
 
-  if (!trans || trans.length < TRANSITIONS_MIN_COUNT) {
+  if ((!trans || trans.length < TRANSITIONS_MIN_COUNT) && Number.isFinite(last)) {
     trans = await getTransitionsFromDB(last, 12);
   }
 
+  // Add transitions to pool
   for (const t of trans) {
     if (poolSet.size >= POOL_SIZE) break;
     poolSet.add(t.to);
@@ -200,23 +201,6 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
 
   const gapsExt = context.gapsExt ?? (await gapStatsExtended(500));
   const sinceMap = gapsExt?.numbers?.since || {};
-
-  if (poolSet.size < POOL_SIZE && Number.isFinite(last)) {
-    // Try window-aware first (if we know window_idx in context)
-    let trans = [];
-    const winIdx = Number.isFinite(context.window_idx) ? Number(context.window_idx) : undefined;
-    if (Number.isFinite(winIdx)) {
-      trans = await getTransitionsWindowed(last, winIdx, 12);
-    }
-    // Fallback to global if sparse
-    if (!trans || trans.length < TRANSITIONS_MIN_COUNT) {
-      trans = await getTransitionsFromDB(last, 12);
-    }
-    for (const t of trans) {
-      if (poolSet.size >= POOL_SIZE) break;
-      poolSet.add(t.to);
-    }
-  }
 
   if (poolSet.size < POOL_SIZE && Number.isFinite(last) && pattern_code === 'B') {
     const wantParity = parityOf(last) === 'even' ? 'odd' : 'even';
@@ -490,10 +474,14 @@ export async function localPredict({ windowId, context = {} }) {
 
   const { pattern_code, scores } = await identifyActivePattern(context);
 
-  const pool = await buildNumberPool({ last, pattern_code, context });
-  const ranked = await scoreAndRank(pool, context);
+  const candidatePool = await buildNumberPool({ last, pattern_code, context });
+  const ranked = await scoreAndRank(candidatePool, context);
 
+  // top5 = best 5 ranked numbers (closest/best suggestions)
   const top5 = ranked.slice(0, 5).map((r) => r.n);
+
+  // pool = next 8 best ranked numbers (excludes top5, gives other best suggestions)
+  const pool = ranked.slice(5, 13).map((r) => r.n);
 
   return {
     allowed: true,

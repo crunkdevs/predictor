@@ -128,14 +128,18 @@ async function topicV2(topic, params = {}) {
       }));
       const seqAsc = rows.map((r) => Number(r.result)).reverse();
       const last = seqAsc.at(-1);
-      const poolNums = await buildNumberPool({ last, pattern_code, context: {} });
-      const ranked = await scoreAndRank(poolNums, {});
+      const candidatePool = await buildNumberPool({ last, pattern_code, context: {} });
+      const ranked = await scoreAndRank(candidatePool, {});
+      // top5 = best 5 ranked numbers (closest/best suggestions)
+      const top5 = ranked.slice(0, 5).map((r) => r.n);
+      // pool = next 8 best ranked numbers (excludes top5, gives other best suggestions)
+      const pool = ranked.slice(5, 13).map((r) => r.n);
       return {
         window_id: w.id,
         last,
-        pool: poolNums,
+        pool,
         ranked,
-        top5: ranked.slice(0, 5).map((r) => r.n),
+        top5,
       };
     }
     case 'v2/runAnalyzeTick': {
