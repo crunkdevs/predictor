@@ -237,9 +237,38 @@ export async function analyzeV2(logger = console) {
         // AI requested → check AI channel gate
         const aiCan = await canPredict(windowId, { channel: 'ai' });
         if (aiCan.can) {
-          logger.log?.('[AnalyzerV2] 🤖 AI Trigger activated.');
-          prediction = await analyzeLatestUnprocessed(logger);
-          source = 'ai';
+          logger.log?.('[AnalyzerV2] 🤖 AI Trigger activated. Reason:', aiGate.reason);
+          try {
+            prediction = await analyzeLatestUnprocessed(logger);
+            if (prediction) {
+              source = 'ai';
+              logger.log?.('[AnalyzerV2] ✅ AI prediction generated successfully');
+            } else {
+              logger.warn?.('[AnalyzerV2] AI prediction returned null, falling back to local');
+              // 🔁 FALL BACK TO LOCAL
+              const lp = await localPredict({ windowId, context: baseContext });
+              if (lp?.allowed) {
+                prediction = lp;
+                source = 'local';
+              } else {
+                logger.log?.('[AnalyzerV2] Local gated:', lp?.reason, lp?.until || '');
+                return null; // nothing to do this tick
+              }
+            }
+          } catch (aiError) {
+            logger.error?.('[AnalyzerV2] AI prediction failed:', aiError?.message || aiError);
+            logger.error?.('[AnalyzerV2] AI error stack:', aiError?.stack);
+            // 🔁 FALL BACK TO LOCAL on AI error
+            logger.log?.('[AnalyzerV2] Falling back to local prediction due to AI error');
+            const lp = await localPredict({ windowId, context: baseContext });
+            if (lp?.allowed) {
+              prediction = lp;
+              source = 'local';
+            } else {
+              logger.log?.('[AnalyzerV2] Local gated:', lp?.reason, lp?.until || '');
+              return null; // nothing to do this tick
+            }
+          }
         } else {
           logger.log?.('[AnalyzerV2] AI gated:', aiCan.reason, aiCan.until || '');
           // 🔁 FALL BACK TO LOCAL
@@ -254,6 +283,7 @@ export async function analyzeV2(logger = console) {
         }
       } else {
         // No AI trigger → go local
+        logger.log?.('[AnalyzerV2] AI not triggered. Reason:', aiGate?.reason || 'unknown');
         const lp = await localPredict({ windowId, context: baseContext });
         if (lp?.allowed) {
           prediction = lp;
@@ -265,6 +295,7 @@ export async function analyzeV2(logger = console) {
       }
     } catch (e) {
       logger.error?.('[AnalyzerV2] Prediction generation failed', e);
+      logger.error?.('[AnalyzerV2] Error stack:', e?.stack);
       return null;
     }
 
@@ -273,24 +304,35 @@ export async function analyzeV2(logger = console) {
       return null;
     }
 
-    // Persist prediction (idempotent guard)
+    // Persist prediction (idempotent guard with atomic check)
+    // Double-check after window lock to prevent race conditions
+    // The window lock (line 69) should prevent most races, but we check again here
+    {
+      const { rows: doubleCheck } = await pool.query(
+        `SELECT 1
+         FROM predictions
+        WHERE window_id = $1
+          AND created_at >= now() - make_interval(secs => $2)
+        LIMIT 1`,
+        [windowId, DEBOUNCE_SEC]
+      );
+      if (doubleCheck.length) {
+        logger.log?.(
+          '[AnalyzerV2] Duplicate prevented: prediction exists after window lock check.'
+        );
+        return null;
+      }
+    }
+
+    // Now insert - the window lock + double check should prevent duplicates
     const { rows: ins } = await pool.query(
       `
-  WITH recent AS (
-    SELECT 1
-      FROM predictions
-     WHERE window_id = $1
-       AND created_at >= now() - make_interval(secs => $2)
-     LIMIT 1
-  )
   INSERT INTO predictions (based_on_image_id, summary, prediction, source, window_id)
-  SELECT NULL, $3::jsonb, $4::jsonb, $5::text, $1::bigint
-  WHERE NOT EXISTS (SELECT 1 FROM recent)
+  VALUES (NULL, $2::jsonb, $3::jsonb, $4::text, $1::bigint)
   RETURNING id
   `,
       [
         windowId,
-        DEBOUNCE_SEC, // you already defined this earlier in the function
         JSON.stringify({
           window_id: windowId,
           pattern,
@@ -308,7 +350,7 @@ export async function analyzeV2(logger = console) {
 
     const predId = ins?.[0]?.id;
     if (!predId) {
-      logger.log?.('[AnalyzerV2] Insert skipped by concurrent guard.');
+      logger.error?.('[AnalyzerV2] Insert failed unexpectedly - no ID returned.');
       return null;
     }
 

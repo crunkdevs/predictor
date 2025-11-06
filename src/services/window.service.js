@@ -190,7 +190,9 @@ export async function canPredict(windowId, { channel = 'local' } = {}) {
   if (ws.status !== 'open') {
     return { can: false, reason: 'window_closed', until: ws.end_at };
   }
-  if (now < new Date(ws.first_predict_after)) {
+
+  // Local prediction should always be on - bypass first_predict_after delay
+  if (channel !== 'local' && now < new Date(ws.first_predict_after)) {
     return { can: false, reason: 'before_first_predict_after', until: ws.first_predict_after };
   }
 
@@ -207,10 +209,11 @@ export async function canPredict(windowId, { channel = 'local' } = {}) {
     if (channel === 'ai') {
       return { can: false, reason: 'paused', until: ws.paused_until };
     }
+    // Local predictions are allowed even when paused
   }
 
-  // In observe: only allow predictions once stabilized
-  if (ws.mode === 'observe') {
+  // Local prediction should always be on - bypass observe mode stabilization check
+  if (channel !== 'local' && ws.mode === 'observe') {
     const ok = await tryExitObserveIfStabilized(windowId);
     if (!ok) return { can: false, reason: 'observe' };
     // if stabilized, fall-through with mode='normal'
