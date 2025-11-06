@@ -1,15 +1,6 @@
-// services/deviation.service.js
 import { pool } from '../config/db.config.js';
 
-/**
- * Detect frequency deviation or trend reversal between short- and long-term windows.
- * Compares color and size distributions across two periods.
- * Returns structured deviation info usable by analyzer or API.
- */
-export async function detectFrequencyDeviation({
-  shortM = 30, // short window: 30 minutes
-  longH = 6, // long window: 6 hours
-} = {}) {
+export async function detectFrequencyDeviation({ shortM = 30, longH = 6 } = {}) {
   const shortWindow = `${Math.max(5, shortM)} minutes`;
   const longWindow = `${Math.max(1, longH)} hours`;
 
@@ -66,19 +57,14 @@ export async function detectFrequencyDeviation({
     return out;
   }
 
-  // compute average ratios
   const ratios = rows.map((r) => Number(r.ratio || 0));
   const mean = ratios.reduce((a, b) => a + b, 0) / ratios.length;
   const maxDev = Math.max(...ratios);
   const minDev = Math.min(...ratios);
   const spread = maxDev - minDev;
 
-  const deviation =
-    spread >= 0.35 || // large imbalance between colors
-    mean <= 0.6 ||
-    mean >= 1.4; // overall spike/drop
+  const deviation = spread >= 0.35 || mean <= 0.6 || mean >= 1.4;
 
-  // detect reversal: one or more colors now dominant that were previously weak
   const reversalColors = rows.filter((r) => r.ratio >= 1.3).map((r) => r.color);
 
   return {

@@ -1,4 +1,3 @@
-// services/analyzer.v2.service.js
 import { pool } from '../config/db.config.js';
 import {
   maintainAndGetCurrentWindow,
@@ -17,7 +16,7 @@ import { detectFrequencyDeviation } from './deviation.service.js';
 import { detectTrendReversal } from './trend.service.js';
 import { getHistoricalReversalBias } from './trend.bias.service.js';
 
-const ANALYZE_LOCK_KEY = Number(process.env.ANALYZE_LOCK_KEY || 972115); // any 32-bit int
+const ANALYZE_LOCK_KEY = Number(process.env.ANALYZE_LOCK_KEY || 972115);
 
 async function withAnalyzeLock(fn, logger = console) {
   const client = await pool.connect();
@@ -78,8 +77,6 @@ export async function analyzeV2(logger = console) {
     const { pattern, metrics } = await detectAndSetPattern(windowId);
     logger.log?.(`[AnalyzerV2] Active Pattern = ${pattern}`, metrics);
 
-    // ---- 48h pattern reactivation: compute signature, match & load top_pool ----
-    // ---- 48h pattern reactivation: compute signature, match & load top_pool ----
     let reactivation = null;
     try {
       const { rows: sigRows } = await pool.query(`SELECT fn_snapshot_signature_48h(now()) AS sig`);
@@ -111,7 +108,6 @@ export async function analyzeV2(logger = console) {
         }
       }
 
-      // persist / clear reactivation state
       if (reactivation && Number(reactivation.similarity) >= 0.75) {
         await setReactivationState(windowId, {
           snapshotId: reactivation.snapshot_id,
@@ -124,7 +120,6 @@ export async function analyzeV2(logger = console) {
       logger.warn?.('[AnalyzerV2] snapshot match skipped:', e?.message || e);
     }
 
-    // Deviation (spikes/drops)
     let deviationSignal = false;
     try {
       const dev = await detectFrequencyDeviation();
@@ -136,7 +131,6 @@ export async function analyzeV2(logger = console) {
       logger.warn?.('[AnalyzerV2] deviation detection failed:', e?.message || e);
     }
 
-    // Trend reversal (Warm↔Cool, size small↔big)
     let reversalSignal = false;
     let trendDetail = null;
     try {
@@ -200,7 +194,6 @@ export async function analyzeV2(logger = console) {
       }
     }
 
-    // AI trigger decision
     const s = await fetchWindowState(windowId);
     const aiGate = await shouldTriggerAI({
       windowState: {
@@ -233,7 +226,6 @@ export async function analyzeV2(logger = console) {
 
     try {
       if (aiGate?.trigger) {
-        // AI requested → check AI channel gate
         const aiCan = await canPredict(windowId, { channel: 'ai' });
         if (aiCan.can) {
           logger.log?.('[AnalyzerV2] 🤖 AI Trigger activated. Reason:', aiGate.reason);
@@ -244,7 +236,6 @@ export async function analyzeV2(logger = console) {
               logger.log?.('[AnalyzerV2] ✅ AI prediction generated successfully');
             } else {
               logger.warn?.('[AnalyzerV2] AI prediction returned null, falling back to local');
-              // 🔁 FALL BACK TO LOCAL
               const lp = await localPredict({ windowId, context: baseContext });
               if (lp?.allowed) {
                 prediction = lp;
@@ -257,7 +248,6 @@ export async function analyzeV2(logger = console) {
           } catch (aiError) {
             logger.error?.('[AnalyzerV2] AI prediction failed:', aiError?.message || aiError);
             logger.error?.('[AnalyzerV2] AI error stack:', aiError?.stack);
-            // 🔁 FALL BACK TO LOCAL on AI error
             logger.log?.('[AnalyzerV2] Falling back to local prediction due to AI error');
             const lp = await localPredict({ windowId, context: baseContext });
             if (lp?.allowed) {
@@ -270,7 +260,6 @@ export async function analyzeV2(logger = console) {
           }
         } else {
           logger.log?.('[AnalyzerV2] AI gated:', aiCan.reason, aiCan.until || '');
-          // 🔁 FALL BACK TO LOCAL
           const lp = await localPredict({ windowId, context: baseContext });
           if (lp?.allowed) {
             prediction = lp;
@@ -281,7 +270,6 @@ export async function analyzeV2(logger = console) {
           }
         }
       } else {
-        // No AI trigger → go local
         logger.log?.('[AnalyzerV2] AI not triggered. Reason:', aiGate?.reason || 'unknown');
         const lp = await localPredict({ windowId, context: baseContext });
         if (lp?.allowed) {
@@ -303,9 +291,6 @@ export async function analyzeV2(logger = console) {
       return null;
     }
 
-    // Persist prediction (idempotent guard with atomic check)
-    // Double-check after window lock to prevent race conditions
-    // The window lock (line 69) should prevent most races, but we check again here
     {
       const { rows: doubleCheck } = await pool.query(
         `SELECT 1
@@ -323,7 +308,6 @@ export async function analyzeV2(logger = console) {
       }
     }
 
-    // Now insert - the window lock + double check should prevent duplicates
     const { rows: ins } = await pool.query(
       `
   INSERT INTO predictions (based_on_image_id, summary, prediction, source, window_id)
@@ -353,10 +337,8 @@ export async function analyzeV2(logger = console) {
       return null;
     }
 
-    // We no longer need attachPredictionWindow (window_id + source were written above)
     await markPredictedNow(windowId);
 
-    // WS broadcast
     try {
       pushAnalytics('analytics/prediction', {
         window_id: windowId,
@@ -393,16 +375,13 @@ export async function analyzeV2(logger = console) {
   }, logger);
 }
 
-// analyzer.v2.service.js
-
 export async function handleOutcome(
   actualResult,
   prevResult,
   correct,
   source = 'local',
-  { windowId = null, spinTs = null } = {} // ⬅️ NEW (optional) for accuracy
+  { windowId = null, spinTs = null } = {}
 ) {
-  // --- Resolve the CORRECT window (for the spin), not "current" ---
   let w = null;
 
   if (Number.isFinite(windowId)) {
@@ -419,17 +398,13 @@ export async function handleOutcome(
     );
     w = rows[0] || null;
   } else {
-    // Back-compat fallback (may be wrong if spin is from a past window)
     w = await maintainAndGetCurrentWindow();
   }
   if (!w) return;
 
-  // -- update wrong/correct streaks (with AI pause guard inside updateStreak) --
   await updateStreak(w.id, { correct, source });
 
-  // -- update transitions if both nums are valid --
   if (Number.isFinite(prevResult) && Number.isFinite(actualResult)) {
-    // 1) Global transitions
     await pool.query(
       `INSERT INTO number_transitions (from_n, to_n, count, last_seen)
        VALUES ($1, $2, 1, now())
@@ -439,7 +414,6 @@ export async function handleOutcome(
       [prevResult, actualResult]
     );
 
-    // 2) Window-aware transitions
     await pool.query(
       `INSERT INTO number_transitions_windowed (from_n, to_n, window_idx, count, last_seen)
        VALUES ($1, $2, $3, 1, now())
@@ -449,7 +423,6 @@ export async function handleOutcome(
       [prevResult, actualResult, Number(w.window_idx)]
     );
 
-    // 3) Cross-window follow-up: current window → next window
     try {
       const nextWindow = (Number(w.window_idx) + 1) % 12;
       await pool.query(
@@ -465,7 +438,6 @@ export async function handleOutcome(
     }
   }
 
-  // -- If the latest prediction had a reactivation snapshot, log outcome + update EMA --
   try {
     const { rows: pr } = await pool.query(
       `SELECT (summary->'reactivation'->>'snapshot_id') AS snapshot_id_txt
@@ -488,7 +460,6 @@ export async function handleOutcome(
       [snapId, !!correct]
     );
 
-    // EMA with alpha=0.2 (tweakable)
     await pool.query(`SELECT fn_update_snapshot_hit_rate($1, $2, $3)`, [snapId, !!correct, 0.2]);
   } catch (e) {
     console.log('[handleOutcome] snapshot EMA error:', e?.message || e);

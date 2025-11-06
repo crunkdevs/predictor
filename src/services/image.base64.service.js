@@ -9,7 +9,6 @@ export async function getImageBase64(id) {
     throw new Error(`Image with id=${id} not found`);
   }
 
-  // return plain base64 string and mime type separately
   const { mime_type, bytes } = rows[0];
   const b64 = Buffer.from(bytes).toString('base64');
   return { base64: b64, mime: mime_type };

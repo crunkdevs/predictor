@@ -1,4 +1,3 @@
-// services/window.service.js
 import { pool } from '../config/db.config.js';
 
 const TZ = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
@@ -6,14 +5,12 @@ const FIRST_PREDICT_DELAY_MIN = Number(process.env.FIRST_PREDICT_DELAY_MIN || 20
 const WRONG_PAUSE_MIN = Number(process.env.PRED_PAUSE_MIN || 10);
 const AI_STREAK_MAX_WRONGS = Number(process.env.AI_STREAK_MAX_WRONGS || 3);
 
-// --- Stabilization thresholds (can be tuned via env if you like)
 const OBSERVE_LOOKBACK = Number(process.env.OBSERVE_LOOKBACK || 30);
 const OBSERVE_MAX_RUN = Number(process.env.OBSERVE_MAX_RUN || 3);
 const OBSERVE_MIN_COLORS = Number(process.env.OBSERVE_MIN_COLORS || 5);
 
 export async function deactivatePattern(windowId) {
   if (!Number.isFinite(Number(windowId))) return;
-  // flip is_active off and reset to 'A' (normal)
   await pool.query(
     `UPDATE window_pattern_state
        SET is_active = FALSE,
@@ -83,7 +80,6 @@ export async function getOrCreatePatternState(windowId) {
   return ins[0];
 }
 
-// --- NEW: stabilization check (simple & cheap)
 async function isStabilized(lookback = OBSERVE_LOOKBACK) {
   const { rows } = await pool.query(
     `
@@ -148,12 +144,10 @@ export async function fetchWindowState(windowId) {
     correct_streak: Number(ps?.correct_streak || 0),
     paused_until: ps?.paused_until || null,
     last_predicted_at: ps?.last_predicted_at || null,
-    // --- NEW: expose mode
     mode: ps?.mode || 'normal',
   };
 }
 
-// --- NEW: helpers to flip modes
 export async function setMode(windowId, mode) {
   await pool.query(`UPDATE window_pattern_state SET mode=$2, updated_at=now() WHERE window_id=$1`, [
     windowId,
@@ -191,32 +185,24 @@ export async function canPredict(windowId, { channel = 'local' } = {}) {
     return { can: false, reason: 'window_closed', until: ws.end_at };
   }
 
-  // Local prediction should always be on - bypass first_predict_after delay
   if (channel !== 'local' && now < new Date(ws.first_predict_after)) {
     return { can: false, reason: 'before_first_predict_after', until: ws.first_predict_after };
   }
 
-  // --- NEW: mode transitions & gating
-  // If paused_until has expired and mode is still 'paused' -> move to 'observe'
   if (ws.paused_until && now >= new Date(ws.paused_until) && ws.mode === 'paused') {
     await setMode(windowId, 'observe');
-    // refresh local state
     ws.mode = 'observe';
   }
 
-  // Block predictions in 'paused'
   if (ws.paused_until && now < new Date(ws.paused_until)) {
     if (channel === 'ai') {
       return { can: false, reason: 'paused', until: ws.paused_until };
     }
-    // Local predictions are allowed even when paused
   }
 
-  // Local prediction should always be on - bypass observe mode stabilization check
   if (channel !== 'local' && ws.mode === 'observe') {
     const ok = await tryExitObserveIfStabilized(windowId);
     if (!ok) return { can: false, reason: 'observe' };
-    // if stabilized, fall-through with mode='normal'
   }
 
   return { can: true };

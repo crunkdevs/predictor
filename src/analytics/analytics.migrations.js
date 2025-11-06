@@ -303,14 +303,7 @@ export async function applyStatsSchema() {
 
 export async function applyAdvancedAnalyticsSchema() {
   await pool.query(`
-    /* =======================================================================
-       0) SAFETY: EXTENSIONS (idempotent)
-       ======================================================================= */
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
-    /* =======================================================================
-       1) NUMBER RULES + RANGE TAGGING HELPERS
-       ======================================================================= */
     -- Even/Odd text (pure arithmetic → IMMUTABLE)
     CREATE OR REPLACE FUNCTION fn_parity_text(p_val int)
     RETURNS text
@@ -415,9 +408,6 @@ export async function applyAdvancedAnalyticsSchema() {
       )
     $$;
 
-    /* =======================================================================
-       2) TIME BUCKET HELPERS + VIEWS
-       ======================================================================= */
     -- Daypart helper
     CREATE OR REPLACE FUNCTION fn_daypart(ts timestamptz)
     RETURNS text
@@ -444,9 +434,6 @@ export async function applyAdvancedAnalyticsSchema() {
       s.result_size
     FROM image_stats s;
 
-    /* =======================================================================
-       3) STREAK / RUN DETECTION (color & cluster)
-       ======================================================================= */
     -- Color sequence with change points
     CREATE OR REPLACE VIEW v_color_seq AS
     SELECT
@@ -510,9 +497,6 @@ BEGIN
   REFRESH MATERIALIZED VIEW mv_color_runs;
 END$$;
 
-    /* =======================================================================
-       4) GAP ANALYSIS (per number and color)
-       ======================================================================= */
     CREATE OR REPLACE FUNCTION fn_gap_stats_json(p_lookback int DEFAULT 500)
     RETURNS jsonb
     LANGUAGE plpgsql STABLE AS $$
@@ -559,9 +543,6 @@ END$$;
       RETURN outj;
     END;$$;
 
-    /* =======================================================================
-       5) DIGIT SHUFFLE HELPERS (000-999)
-       ======================================================================= */
     CREATE OR REPLACE FUNCTION fn_digits_sum_0_27(a int, b int, c int)
     RETURNS int
     LANGUAGE sql IMMUTABLE AS $$ SELECT (a + b + c) $$;
@@ -582,9 +563,6 @@ END$$;
     RETURNS text
     LANGUAGE sql IMMUTABLE AS $$ SELECT fn_color_from_result((a+b+c)) $$;
 
-    /* =======================================================================
-       6) FEEDBACK + RETRAIN
-       ======================================================================= */
     CREATE TABLE IF NOT EXISTS prediction_logs (
       id BIGSERIAL PRIMARY KEY,
       created_at timestamptz NOT NULL DEFAULT now(),
@@ -635,9 +613,6 @@ END$$;
       END LOOP;
     END;$$;
 
-    /* =======================================================================
-       7) ACCURACY & RATIOS REPORTS
-       ======================================================================= */
     CREATE MATERIALIZED VIEW IF NOT EXISTS mv_accuracy_hourly AS
     SELECT
       date_trunc('hour', created_at) AS hour_bucket,
@@ -691,9 +666,6 @@ END$$;
       RETURN COALESCE(outj, jsonb_build_object('lookback', p_lookback));
     END;$$;
 
-    /* =======================================================================
-       8) NUMBER PATTERN TRACKING (sequence/wrap/palindrome) over last N
-       ======================================================================= */
 CREATE OR REPLACE FUNCTION fn_number_patterns_json(p_lookback int DEFAULT 200)
 RETURNS jsonb
 LANGUAGE plpgsql STABLE AS $$
@@ -808,7 +780,6 @@ BEGIN
   color_gaps_clean AS (
     SELECT col, gap FROM color_gaps WHERE gap IS NOT NULL
   ),
-  /* ---- per-number aggregated stats, then objectify ---- */
   num_aggs_rows AS (
     SELECT
       n,
@@ -828,7 +799,6 @@ BEGIN
     ) AS num_gap_aggs
     FROM num_aggs_rows
   ),
-  /* ---- per-color aggregated stats, then objectify ---- */
   color_aggs_rows AS (
     SELECT
       col,

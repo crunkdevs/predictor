@@ -1,4 +1,3 @@
-// services/trend.bias.service.js
 import { pool } from '../config/db.config.js';
 
 export async function getHistoricalReversalBias(
@@ -17,10 +16,8 @@ export async function getHistoricalReversalBias(
   const r = rows[0];
   if (!r) return { color: null, size: null };
 
-  // 1) color bias
   let color = null;
   if (Number(r.color_events) >= minEvents && Number(r.color_flip_rate_pct) >= minRatePct) {
-    // pick most common pair as target "to_cluster"
     const pairs = r.color_pairs || {};
     let bestPair = null,
       bestCount = -1;
@@ -40,7 +37,6 @@ export async function getHistoricalReversalBias(
     }
   }
 
-  // 2) size bias
   let size = null;
   if (Number(r.size_events) >= minEvents && Number(r.size_flip_rate_pct) >= minRatePct) {
     const pairs = r.size_pairs || {};

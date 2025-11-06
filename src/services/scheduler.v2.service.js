@@ -1,4 +1,3 @@
-// services/scheduler.v2.service.js
 import cron from 'node-cron';
 import { pool } from '../config/db.config.js';
 import { analyzeV2 } from './analyzer.v2.service.js';
@@ -35,8 +34,6 @@ async function maintenance(logger = console) {
   await ensureTodayWindows();
   await closeExpiredWindows();
 
-  // V2: Take a 48h pattern snapshot if we don't have a recent one
-  // (ensures at most ~one snapshot per 48h window)
   try {
     const { rows: recent } = await pool.query(
       `SELECT 1

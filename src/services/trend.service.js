@@ -5,12 +5,10 @@ export async function detectTrendReversal({
   longM = Number(process.env.REVERSAL_LONG_MIN || 60),
   delta = Number(process.env.REVERSAL_DELTA || 0.1),
 } = {}) {
-  // Guardrails
   shortM = Math.max(5, shortM | 0);
   longM = Math.max(shortM + 1, longM | 0);
   delta = Math.max(0.01, Math.min(0.5, Number(delta)));
 
-  // TTL cache
   const TTL = Math.max(5, Number(process.env.TREND_TTL_SEC || 60)) * 1000;
   if (!global.__TREND_CACHE) global.__TREND_CACHE = { ts: 0, out: null, key: '' };
   const key = `${shortM}|${longM}|${delta}`;
@@ -19,7 +17,6 @@ export async function detectTrendReversal({
     return global.__TREND_CACHE.out;
   }
 
-  // Helper to fetch shares for a rolling window
   async function fetchShares(intervalSql) {
     const q = `
       WITH base AS (
@@ -59,7 +56,6 @@ export async function detectTrendReversal({
   const shortShares = await fetchShares(`interval '${shortM} minutes'`);
   const longShares = await fetchShares(`interval '${longM} minutes'`);
 
-  // Compute deltas (short - long)
   const d = {
     warm: Number(shortShares.warm) - Number(longShares.warm),
     cool: Number(shortShares.cool) - Number(longShares.cool),
@@ -68,15 +64,13 @@ export async function detectTrendReversal({
     big: Number(shortShares.big) - Number(longShares.big),
   };
 
-  // Pick the dominant cluster in long & short
   const maxKey = (obj, keys) => keys.reduce((best, k) => (obj[k] > obj[best] ? k : best), keys[0]);
   const longColorDom = maxKey(longShares, ['warm', 'cool', 'neutral']);
   const shortColorDom = maxKey(shortShares, ['warm', 'cool', 'neutral']);
   const longSizeDom = longShares.small >= longShares.big ? 'small' : 'big';
   const shortSizeDom = shortShares.small >= shortShares.big ? 'small' : 'big';
 
-  // Reversal checks: sign flip w/ magnitude threshold
-  const colorFlip = shortColorDom !== longColorDom && Math.abs(d[shortColorDom]) >= delta; // ensure the "to" side gained ≥ delta vs long
+  const colorFlip = shortColorDom !== longColorDom && Math.abs(d[shortColorDom]) >= delta;
 
   const sizeFlip =
     shortSizeDom !== longSizeDom && Math.abs(shortSizeDom === 'small' ? d.small : d.big) >= delta;

@@ -1,12 +1,9 @@
-// services/outcome.service.js
 import { pool } from '../config/db.config.js';
 import { handleOutcome } from './analyzer.v2.service.js';
 
-// Evaluate latest prediction (of the window at time T) against actual result in image_stats
 export async function processOutcomeForImage(imageId) {
   if (!Number.isFinite(Number(imageId))) return;
 
-  // 1) fetch actual result + time of this image
   const { rows: imgRows } = await pool.query(
     `SELECT s.result::int AS actual, s.screen_shot_time AS ts
        FROM image_stats s
@@ -19,7 +16,6 @@ export async function processOutcomeForImage(imageId) {
   const actual = Number(row.actual);
   const ts = new Date(row.ts);
 
-  // 2) fetch previous actual result (for transition update)
   const { rows: prevRows } = await pool.query(
     `SELECT result::int AS prev
        FROM image_stats
@@ -30,7 +26,6 @@ export async function processOutcomeForImage(imageId) {
   );
   const prev = Number(prevRows?.[0]?.prev);
 
-  // 3) find the window that covers this timestamp
   const { rows: winRows } = await pool.query(
     `SELECT id
        FROM windows
@@ -40,9 +35,8 @@ export async function processOutcomeForImage(imageId) {
     [ts]
   );
   const windowId = Number(winRows?.[0]?.id);
-  if (!Number.isFinite(windowId)) return; // no window → skip
+  if (!Number.isFinite(windowId)) return;
 
-  // 4) get latest prediction for that window, made before this spin ts
   const { rows: predRows } = await pool.query(
     `SELECT id, prediction, summary, source
        FROM predictions
@@ -53,15 +47,12 @@ export async function processOutcomeForImage(imageId) {
     [windowId, ts]
   );
   const pred = predRows?.[0];
-  if (!pred) return; // no prediction yet → nothing to score
+  if (!pred) return;
 
-  // 5) idempotency: if this prediction already evaluated, skip
   const evaluatedOn = pred.summary?.evaluated_on ?? pred.summary?.evaluated_on_image_id;
   if (evaluatedOn != null) return;
 
-  // 6) extract predicted top candidates
   const pj = pred.prediction || {};
-  // supported shapes: { top5: [..] } OR { top_candidates: [{result,prob}, ...] }
   let top5 = Array.isArray(pj.top5) ? pj.top5.map(Number) : null;
   if (!top5 || !top5.length) {
     const cand = Array.isArray(pj.top_candidates) ? pj.top_candidates : [];
@@ -70,7 +61,6 @@ export async function processOutcomeForImage(imageId) {
 
   const correct = Array.isArray(top5) && top5.includes(actual);
 
-  // 7) mark prediction JSON so we never re-process this same prediction (idempotent)
   await pool.query(
     `UPDATE predictions
         SET prediction = jsonb_set(prediction, '{correct}', to_jsonb($1::boolean), true),

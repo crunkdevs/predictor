@@ -1,4 +1,3 @@
-// services/analyzer.ai.service.js
 import OpenAI from 'openai';
 
 import {
@@ -140,7 +139,6 @@ Guidelines:
   try {
     out = JSON.parse(raw);
     logger.log?.('[AIAnalyzer] Parsed AI response:', out);
-    // eslint-disable-next-line no-unused-vars
   } catch (e) {
     logger.warn?.('[AIAnalyzer] Failed to parse JSON, trying regex extraction. Raw:', raw);
     const m = raw.match(/\{[\s\S]*\}/);
@@ -165,7 +163,6 @@ Guidelines:
   const conf = Number(out.confidence || 0.5);
   const len = Math.max(1, nums.length);
 
-  // Get pattern info to match local prediction structure
   let pattern_code = 'A';
   let pattern_scores = { A: 0, B: 0, C: 0 };
   let last = null;
@@ -184,7 +181,6 @@ Guidelines:
     logger.warn?.('[AIAnalyzer] Failed to get pattern info:', e?.message || e);
   }
 
-  // Build top_candidates with full info
   const top_candidates = nums.map((n) => ({
     result: n,
     color: numToColor(n),
@@ -193,7 +189,6 @@ Guidelines:
     size: sizeOf(n),
   }));
 
-  // Extract top5 array for compatibility
   const top5 = nums.slice(0, 5);
 
   return {

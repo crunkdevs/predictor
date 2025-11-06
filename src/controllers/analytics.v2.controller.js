@@ -1,4 +1,3 @@
-// src/controllers/analytics.v2.controller.js
 import { pool } from '../config/db.config.js';
 
 import {
@@ -35,7 +34,6 @@ const ok = (res, data) => res.json({ ok: true, ...data });
 const bad = (res, code, msg) => res.status(code).json({ ok: false, error: msg });
 const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
-// controllers/analytics.v2.controller.js
 export async function reversalBias(req, res) {
   try {
     const win = Number(req.query.window ?? req.query.w ?? -1);
@@ -77,16 +75,11 @@ export async function windowAccuracy(req, res) {
   }
 }
 
-/* -------------------------------------------------------
- * WINDOWS / STATE
- * ----------------------------------------------------- */
-
 export async function backfillWindowedTransitions(req, res) {
   try {
     const force = String(req.query.force || '0') === '1';
     const tz = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
 
-    // Guard: prevent accidental re-run (would double counts)
     const { rows: crows } = await pool.query(
       `SELECT COUNT(*)::int AS c FROM number_transitions_windowed`
     );
@@ -104,7 +97,6 @@ export async function backfillWindowedTransitions(req, res) {
       await pool.query(`TRUNCATE number_transitions_windowed`);
     }
 
-    // Backfill from v_spins (uses your PL/pgSQL function)
     await pool.query(`SELECT fn_backfill_window_transitions($1)`, [tz]);
 
     const { rows: stats } = await pool.query(
@@ -187,9 +179,9 @@ export async function statusSummary(req, res) {
 
 export async function trendStatus(req, res) {
   try {
-    const shortM = num(req.query.shortM, undefined); // minutes
-    const longM = num(req.query.longM, undefined); // minutes
-    const delta = req.query.delta != null ? Number(req.query.delta) : undefined; // 0..1
+    const shortM = num(req.query.shortM, undefined);
+    const longM = num(req.query.longM, undefined);
+    const delta = req.query.delta != null ? Number(req.query.delta) : undefined;
     const out = await detectTrendReversal({ shortM, longM, delta });
     return ok(res, { reversal: !!out.reversal, detail: out });
   } catch (e) {
@@ -222,8 +214,8 @@ export async function observationStatus(req, res) {
 
 export async function deviationStatus(req, res) {
   try {
-    const shortM = num(req.query.shortM, undefined); // optional: minutes for short window
-    const longH = num(req.query.longH, undefined); // optional: hours for long window
+    const shortM = num(req.query.shortM, undefined);
+    const longH = num(req.query.longH, undefined);
     const dev = await detectFrequencyDeviation({ shortM, longH });
     const isDeviation = !!(dev?.deviation || dev?.reversal);
     return ok(res, { deviation: dev || {}, isDeviation });
@@ -265,10 +257,6 @@ export async function todayWindows(req, res) {
   }
 }
 
-/* -------------------------------------------------------
- * PATTERN & PREDICTION (DRY RUNS)
- * ----------------------------------------------------- */
-
 export async function detectPattern(req, res) {
   try {
     const w = await maintainAndGetCurrentWindow();
@@ -282,7 +270,6 @@ export async function detectPattern(req, res) {
   }
 }
 
-// Pure local (no OpenAI) — dry run, does not write to DB.
 export async function localPredictDry(req, res) {
   try {
     const w = await maintainAndGetCurrentWindow();
@@ -296,7 +283,6 @@ export async function localPredictDry(req, res) {
   }
 }
 
-// Full analyze tick using V2 (will write predictions & attach window if allowed).
 export async function runAnalyzeTick(req, res) {
   try {
     const out = await analyzeV2(console);
@@ -307,14 +293,12 @@ export async function runAnalyzeTick(req, res) {
   }
 }
 
-// Low-level building blocks (useful for UI debugs)
 export async function scoringPreview(req, res) {
   try {
     const w = await maintainAndGetCurrentWindow();
     if (!w) return bad(res, 409, 'no current window');
 
-    const { pattern_code /*, scores*/ } = await identifyActivePattern({});
-    // quick last sequence for context
+    const { pattern_code } = await identifyActivePattern({});
     const { rows: seqRows } = await pool.query(
       `SELECT result FROM v_spins ORDER BY screen_shot_time DESC LIMIT 30`
     );
@@ -324,14 +308,11 @@ export async function scoringPreview(req, res) {
     const candidatePool = await buildNumberPool({ last, pattern_code, context: {} });
     const ranked = await scoreAndRank(candidatePool, {});
 
-    // top5 = best 5 ranked numbers (closest/best suggestions)
     const top5 = ranked.slice(0, 5).map((r) => r.n);
-    // pool = next 8 best ranked numbers (excludes top5, gives other best suggestions)
     const pool = ranked.slice(5, 13).map((r) => r.n);
 
     return ok(res, {
       window_id: w.id,
-      // pattern_code/scores kept internal for V2 surface
       last,
       pool,
       ranked,
@@ -348,7 +329,6 @@ export async function aiTriggerStatus(req, res) {
     const w = await maintainAndGetCurrentWindow();
     if (!w) return bad(res, 409, 'no current window');
 
-    // synthesize a minimal "windowState" expected by shouldTriggerAI
     const state = await fetchWindowState(w.id);
     let deviationSignal = false;
     let reversalSignal = false;
@@ -379,10 +359,6 @@ export async function aiTriggerStatus(req, res) {
   }
 }
 
-/* -------------------------------------------------------
- * RECENT DATA / AGGREGATES (V2-friendly)
- * ----------------------------------------------------- */
-
 export async function recentPredictions(req, res) {
   try {
     const limit = Math.max(1, Math.min(200, num(req.query.limit, 50)));
@@ -393,7 +369,6 @@ export async function recentPredictions(req, res) {
         LIMIT $1`,
       [limit]
     );
-    // Note: summary contains "reactivation" metadata if a match was found
     return ok(res, { rows });
   } catch (e) {
     console.error('[v2.recentPredictions]', e);
@@ -436,11 +411,6 @@ export async function numberTransitions(req, res) {
   }
 }
 
-/* -------------------------------------------------------
- * NEW: V2 endpoints to show 48h snapshots / reactivation
- * ----------------------------------------------------- */
-
-// List latest snapshots (optionally include similarity vs now)
 export async function patternSnapshots(req, res) {
   try {
     const limit = Math.max(1, Math.min(50, num(req.query.limit, 10)));
@@ -474,7 +444,6 @@ export async function patternSnapshots(req, res) {
   }
 }
 
-// Current best reactivation candidate (snapshot + similarity)
 export async function patternReactivation(req, res) {
   try {
     const { rows: sigRows } = await pool.query(`SELECT fn_snapshot_signature_48h(now()) AS sig`);
@@ -507,10 +476,6 @@ export async function patternReactivation(req, res) {
     return bad(res, 500, e?.message || 'failed');
   }
 }
-
-/* -------------------------------------------------------
- * OPTIONAL: re-expose core analytics tuned for V2 dashboards
- * ----------------------------------------------------- */
 
 export async function coreBundleForLatest(req, res) {
   try {

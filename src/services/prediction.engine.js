@@ -1,4 +1,3 @@
-// services/prediction.engine.js
 import { pool } from '../config/db.config.js';
 import {
   canPredict,
@@ -15,8 +14,6 @@ import {
   fetchRecentSpins,
 } from '../analytics/analytics.handlers.js';
 
-// ---------- Config ----------
-
 const TZ = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
 const POOL_SIZE = 8;
 const WRONG_PAUSE_MIN = Number(process.env.PRED_PAUSE_MIN || 10);
@@ -24,8 +21,6 @@ const PAUSE_AFTER_WRONGS = Number(process.env.PRED_PAUSE_AFTER_WRONGS || 3);
 const AI_MAX_PER_DAY = Number(process.env.AI_MAX_PER_DAY || 3);
 const AI_MIN_GAP_HOURS = Number(process.env.AI_MIN_GAP_HOURS || 6);
 const AI_MAX_PER_WINDOW = Number(process.env.AI_MAX_PER_WINDOW || 1);
-
-// ---------- Small utils ----------
 
 const COLOR_MAP = {
   Red: [0, 1, 26, 27],
@@ -64,13 +59,11 @@ function clamp01(x) {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
-const quadKey = (n) => `${parityOf(n)}_${sizeOf(n)}`; // "even_small" | "odd_small" | "even_big" | "odd_big"
+const quadKey = (n) => `${parityOf(n)}_${sizeOf(n)}`;
 
 async function getFourClassShares(limit = 200) {
-  // Pull recent spins via existing helper to stay consistent
   const rows = await fetchRecentSpins(Math.max(50, Math.min(500, Number(limit) || 200)));
   if (!rows?.length) {
-    // neutral shares if nothing to go on
     return {
       even_small: 0.25,
       odd_small: 0.25,
@@ -86,8 +79,6 @@ async function getFourClassShares(limit = 200) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
   return Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, v / total]));
 }
-
-// ---------- Data access helpers ----------
 
 async function getLastResults(limit = 30) {
   const rows = await fetchRecentSpins(limit);
@@ -117,8 +108,6 @@ async function getTransitionsWindowed(fromN, windowIdx, topK = 12) {
   );
   return rows.map((r) => ({ to: Number(r.to_n), c: Number(r.count) }));
 }
-
-// ---------- Pattern identification ----------
 
 export async function identifyActivePattern(context = {}) {
   const _lb = process.env.PRED_LOOKBACK ?? 200;
@@ -161,13 +150,10 @@ export async function identifyActivePattern(context = {}) {
   };
 }
 
-// ---------- Pool selection (7–8 numbers) ----------
-
 export async function buildNumberPool({ last, pattern_code, context = {} }) {
   const poolSet = new Set();
   const TRANSITIONS_MIN_COUNT = Number(process.env.TRANSITIONS_MIN_COUNT || 2);
 
-  // Get transitions (window-aware first, fallback to global)
   let trans = [];
   if (Number.isFinite(context.window_idx) && Number.isFinite(last)) {
     trans = await getTransitionsWindowed(last, Number(context.window_idx), 12);
@@ -177,13 +163,11 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
     trans = await getTransitionsFromDB(last, 12);
   }
 
-  // Add transitions to pool
   for (const t of trans) {
     if (poolSet.size >= POOL_SIZE) break;
     poolSet.add(t.to);
   }
 
-  // Reactivation bias (from 48h snapshot) — if present, seed pool with those numbers first
   const react = context.reactivation || null;
   const reactOk = react && Number(react.similarity) >= 0.75;
   const reactPool = Array.isArray(react?.snapshot_top_pool)
@@ -231,8 +215,6 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
   return Array.from(poolSet).slice(0, POOL_SIZE);
 }
 
-// ---------- Scoring / ranking ----------
-
 export async function scoreAndRank(pool, context = {}) {
   const tb = context.timeBuckets ?? (await timeBucketsSnapshot());
   const runs = context.colorRuns ?? (await recentColorRuns(50));
@@ -240,11 +222,10 @@ export async function scoreAndRank(pool, context = {}) {
   const ratio = context.ratios ?? (await ratios(200));
   const fourShares = context.fourShares ?? (await getFourClassShares(200));
 
-  const trend = context.trend || null; // pass from analyzer if desired
-  const toCluster = trend?.color?.to_cluster; // 'Warm' | 'Cool' | 'Neutral'
-  const toSize = trend?.size?.to; // 'small' | 'big'
+  const trend = context.trend || null;
+  const toCluster = trend?.color?.to_cluster;
+  const toSize = trend?.size?.to;
 
-  // Reactivation context
   const react = context.reactivation || null;
   const reactOk = react && Number(react.similarity) >= 0.75;
   const reactPool = Array.isArray(react?.snapshot_top_pool)
@@ -279,7 +260,6 @@ export async function scoreAndRank(pool, context = {}) {
   const oddPct = Number(ratio?.odd_even?.odd_pct ?? NaN);
   const smallPct = Number(ratio?.small_big?.small_pct ?? NaN);
 
-  // Rebalanced weights to accommodate reactivation boost
   const W = {
     gapPressure: Number(process.env.W_GAP_PRESSURE ?? 0.22),
     streakBreak: Number(process.env.W_STREAK_BREAK ?? 0.18),
@@ -293,13 +273,13 @@ export async function scoreAndRank(pool, context = {}) {
 
   const reactivationGain =
     reactOk && Number.isFinite(Number(react.similarity))
-      ? clamp01((Number(react.similarity) - 0.7) / 0.3) // 0 at 0.70, 1 at 1.00
+      ? clamp01((Number(react.similarity) - 0.7) / 0.3)
       : 0;
 
   const scored = pool.map((n) => {
     const k = String(n);
     const col = numToColor(n);
-    const qk = quadKey(n); // e.g., "even_small"
+    const qk = quadKey(n);
 
     const gapP =
       (sinceMap[k] == null ? 1.0 : Math.min(1, Number(sinceMap[k] || 0) / 30)) +
@@ -351,14 +331,11 @@ export async function scoreAndRank(pool, context = {}) {
 
   return scored;
 }
-// ---------- AI Trigger rules ----------
 
-// --- AI-only wrong streak guard ---
 const AI_STREAK_MAX_WRONGS = Number(process.env.AI_STREAK_MAX_WRONGS || 3);
 const AI_STREAK_COOLDOWN_MIN = Number(process.env.AI_STREAK_COOLDOWN_MIN || 120);
 
 async function getAiConsecutiveWrongStreak(limit = 10) {
-  // Read recent AI predictions; 'correct' we store in prediction JSON (prediction.correct)
   const { rows } = await pool.query(
     `SELECT
         created_at,
@@ -377,12 +354,12 @@ async function getAiConsecutiveWrongStreak(limit = 10) {
       if (streak === 0) lastTs = r.created_at;
       streak++;
     } else if (r.correct === true) {
-      break; // streak breaks on first true
+      break;
     } else {
-      break; // unknown/null → also break
+      break;
     }
   }
-  return { streak, lastTs }; // lastTs = time when the latest wrong in this streak was logged
+  return { streak, lastTs };
 }
 
 export async function shouldTriggerAI({
@@ -399,8 +376,6 @@ export async function shouldTriggerAI({
     return { trigger: false, reason: 'before_first_predict_after' };
   }
 
-  // Initially focus only on local predictions - AI will work later
-  // Check if 30 minutes have passed since stats started being stored
   const AI_START_DELAY_MIN = Number(process.env.AI_START_DELAY_MIN || 30);
   const { rows: firstStat } = await pool.query(
     `SELECT MIN(parsed_at) AS first_stat_time FROM image_stats`
@@ -420,7 +395,6 @@ export async function shouldTriggerAI({
       };
     }
   } else {
-    // No stats yet - definitely too early for AI
     return {
       trigger: false,
       reason: 'ai_start_delay',
@@ -492,8 +466,6 @@ export async function shouldTriggerAI({
   return { trigger: false, reason: 'local_sufficient' };
 }
 
-// ---------- Main: produce local prediction (no AI) ----------
-
 export async function localPredict({ windowId, context = {} }) {
   const gate = await canPredict(windowId, { channel: 'local' });
   if (!gate.can) return { allowed: false, reason: gate.reason, until: gate.until };
@@ -506,10 +478,8 @@ export async function localPredict({ windowId, context = {} }) {
   const candidatePool = await buildNumberPool({ last, pattern_code, context });
   const ranked = await scoreAndRank(candidatePool, context);
 
-  // top5 = best 5 ranked numbers (closest/best suggestions)
   const top5 = ranked.slice(0, 5).map((r) => r.n);
 
-  // pool = next 8 best ranked numbers (excludes top5, gives other best suggestions)
   const pool = ranked.slice(5, 13).map((r) => r.n);
 
   return {
@@ -522,8 +492,6 @@ export async function localPredict({ windowId, context = {} }) {
     top5,
   };
 }
-
-// ---------- Feedback hooks ----------
 
 export async function onOutcome({ windowId, predictedTop5, actual }) {
   const correct = Array.isArray(predictedTop5) && predictedTop5.includes(Number(actual));

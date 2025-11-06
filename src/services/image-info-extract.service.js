@@ -1,11 +1,9 @@
-// services/image-info-extract.service.js
 import OpenAI from 'openai';
 import { getImageBase64 } from './image.base64.service.js';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function parseGameScreenshot(imageId) {
-  // const base64 = await getImageBase64(imageId);
   const { base64, mime } = await getImageBase64(imageId);
 
   const imageUrl = `data:${mime};base64,${base64}`;

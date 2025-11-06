@@ -75,7 +75,6 @@ async function topicV2(topic, params = {}) {
         reversalSignal,
       });
 
-      // WS notify (your style: side-effect before return)
       try {
         pushAnalyticsV2('analytics-v2/ai-trigger', {
           window_id: w.id,
@@ -130,9 +129,7 @@ async function topicV2(topic, params = {}) {
       const last = seqAsc.at(-1);
       const candidatePool = await buildNumberPool({ last, pattern_code, context: {} });
       const ranked = await scoreAndRank(candidatePool, {});
-      // top5 = best 5 ranked numbers (closest/best suggestions)
       const top5 = ranked.slice(0, 5).map((r) => r.n);
-      // pool = next 8 best ranked numbers (excludes top5, gives other best suggestions)
       const pool = ranked.slice(5, 13).map((r) => r.n);
       return {
         window_id: w.id,
@@ -195,7 +192,6 @@ async function topicV2(topic, params = {}) {
         [best.snapshot_id]
       );
 
-      // WS notify probe result (on-demand)
       try {
         pushAnalyticsV2('analytics-v2/reactivation-probe', {
           snapshot_id: Number(best.snapshot_id),
@@ -322,7 +318,6 @@ export function setupAnalyticsV2WS(httpServer, { path = '/ws/analytics-v2' } = {
     ws.on('close', () => CLIENTS.delete(ws));
     safeSend(ws, { type: 'analytics-v2/hello', ts: Date.now() });
 
-    // send immediate snapshot
     try {
       const first = await topicV2('v2/window', {});
       safeSend(ws, { type: 'analytics-v2/window', payload: first, ts: Date.now() });
