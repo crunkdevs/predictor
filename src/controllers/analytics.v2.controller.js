@@ -159,9 +159,8 @@ export async function statusSummary(req, res) {
       const sig = sigRows?.[0]?.sig || null;
       if (sig) {
         const { rows: matchRows } = await pool.query(
-          `SELECT m.snapshot_id, m.similarity
-   FROM fn_match_pattern_snapshots($1::jsonb, 1)
-        AS m(snapshot_id bigint, similarity numeric)`,
+          `SELECT snapshot_id, similarity
+   FROM fn_match_pattern_snapshots($1::jsonb, 1)`,
           [sig]
         );
         const best = matchRows?.[0] || null;
@@ -458,9 +457,8 @@ export async function patternSnapshots(req, res) {
     if (!sig) return ok(res, { snapshots: snaps, match: null });
 
     const { rows: matchRows } = await pool.query(
-      `SELECT m.snapshot_id, m.similarity
-    FROM fn_match_pattern_snapshots($1::jsonb, 3)
-         AS m(snapshot_id bigint, similarity numeric)`,
+      `SELECT snapshot_id, similarity
+    FROM fn_match_pattern_snapshots($1::jsonb, 3)`,
       [sig]
     );
 
@@ -479,9 +477,8 @@ export async function patternReactivation(req, res) {
     if (!sig) return ok(res, { match: null });
 
     const { rows: matchRows } = await pool.query(
-      `SELECT m.snapshot_id, m.similarity
-   FROM fn_match_pattern_snapshots($1::jsonb, 1)
-        AS m(snapshot_id bigint, similarity numeric)`,
+      `SELECT snapshot_id, similarity
+   FROM fn_match_pattern_snapshots($1::jsonb, 1)`,
       [sig]
     );
     const best = matchRows?.[0] || null;
