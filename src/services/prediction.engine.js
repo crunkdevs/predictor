@@ -399,6 +399,35 @@ export async function shouldTriggerAI({
     return { trigger: false, reason: 'before_first_predict_after' };
   }
 
+  // Initially focus only on local predictions - AI will work later
+  // Check if 30 minutes have passed since stats started being stored
+  const AI_START_DELAY_MIN = Number(process.env.AI_START_DELAY_MIN || 30);
+  const { rows: firstStat } = await pool.query(
+    `SELECT MIN(parsed_at) AS first_stat_time FROM image_stats`
+  );
+  const firstStatTime = firstStat[0]?.first_stat_time;
+  if (firstStatTime) {
+    const elapsedMin = (Date.now() - new Date(firstStatTime).getTime()) / 60000;
+    if (elapsedMin < AI_START_DELAY_MIN) {
+      return {
+        trigger: false,
+        reason: 'ai_start_delay',
+        details: {
+          elapsedMin: Math.round(elapsedMin),
+          requiredMin: AI_START_DELAY_MIN,
+          remainingMin: Math.max(0, Math.ceil(AI_START_DELAY_MIN - elapsedMin)),
+        },
+      };
+    }
+  } else {
+    // No stats yet - definitely too early for AI
+    return {
+      trigger: false,
+      reason: 'ai_start_delay',
+      details: { elapsedMin: 0, requiredMin: AI_START_DELAY_MIN, remainingMin: AI_START_DELAY_MIN },
+    };
+  }
+
   try {
     const { streak, lastTs } = await getAiConsecutiveWrongStreak(10);
     if (streak >= AI_STREAK_MAX_WRONGS) {
