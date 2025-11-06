@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import fs from 'fs/promises';
 import { pool } from '../src/config/db.config.js';
 
