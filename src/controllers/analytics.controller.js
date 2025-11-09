@@ -34,7 +34,7 @@ async function resolveAnchor(anchorParam) {
 export async function bundle(req, res) {
   try {
     const lookback = num(req.query.lookback, num(process.env.PRED_LOOKBACK, 200));
-    const topk = Math.max(1, Math.min(27, num(req.query.topk, num(process.env.PRED_TOPK, 5))));
+    const topk = Math.max(1, Math.min(27, num(req.query.topk, num(process.env.PRED_TOPK, 8))));
     const anchor = await resolveAnchor(req.query.anchor);
     const data = await advancedAnalyticsBundle(anchor, { lookback, topk });
     return ok(res, data);
@@ -47,7 +47,7 @@ export async function bundle(req, res) {
 export async function core(req, res) {
   try {
     const lookback = num(req.query.lookback, 200);
-    const topk = Math.max(1, Math.min(27, num(req.query.topk, 5)));
+    const topk = Math.max(1, Math.min(27, num(req.query.topk, 8)));
     const anchor = await resolveAnchor(req.query.anchor);
     const data = await allStatsBundle(anchor, lookback, topk);
     return ok(res, { coreStats: data });

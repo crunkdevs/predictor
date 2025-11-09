@@ -24,7 +24,7 @@ import { pushAnalytics } from '../analytics/analytics.ws.js';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const LOOKBACK = process.env.PRED_LOOKBACK ?? '200';
-const HOTCOLD_K = Number(process.env.PRED_TOPK || 5);
+const HOTCOLD_K = Number(process.env.PRED_TOPK || 8);
 const MODEL = process.env.PRED_MODEL || 'gpt-4.1-mini';
 const IS_GPT5 = (MODEL || '').toLowerCase().startsWith('gpt-5');
 const TEMP = IS_GPT5

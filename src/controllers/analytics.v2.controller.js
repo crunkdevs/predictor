@@ -482,7 +482,7 @@ export async function coreBundleForLatest(req, res) {
     const lookback = Math.max(20, Math.min(1200, num(req.query.lookback, 200)));
     const [coreStats, gaps_extended, r, color_runs, recent_spins, time_buckets, windows] =
       await Promise.all([
-        allStatsForLatestAnchor(lookback, Math.max(1, Math.min(27, num(req.query.topk, 5)))),
+        allStatsForLatestAnchor(lookback, Math.max(1, Math.min(27, num(req.query.topk, 8)))),
         gapStatsExtended(Math.max(lookback, 500)),
         ratios(Math.min(lookback, 200)),
         recentColorRuns(Math.max(5, Math.min(200, num(req.query.crLimit, 50)))),

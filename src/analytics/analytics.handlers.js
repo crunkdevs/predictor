@@ -4,7 +4,7 @@ import { applyAdvancedAnalyticsSchema } from './analytics.migrations.js';
 const nn = (j) => j ?? {};
 const isPosInt = (n) => Number.isFinite(n) && n > 0 && Math.floor(n) === n;
 const sanitizeLookback = (n, def = 200) => (isPosInt(n) ? n : def);
-const sanitizeK = (k, def = 5) => (Number.isFinite(k) && k >= 1 && k <= 27 ? Math.floor(k) : def);
+const sanitizeK = (k, def = 8) => (Number.isFinite(k) && k >= 1 && k <= 27 ? Math.floor(k) : def);
 
 export async function getLatestAnchorImageId() {
   const { rows } = await pool.query(
@@ -60,13 +60,20 @@ export async function lastDigitFreq(anchorId, lookback) {
   return nn(rows[0]?.stats);
 }
 
-export async function hotCold(anchorId, lookback, k = 5) {
+export async function hotCold(
+  anchorId,
+  lookback,
+  kHot = Number(process.env.PRED_HOT_COUNT || 5),
+  kCold = Number(process.env.PRED_COLD_COUNT || 8)
+) {
   lookback = sanitizeLookback(lookback);
-  k = sanitizeK(k);
-  const { rows } = await pool.query(`SELECT fn_hot_cold_numbers_json($1,$2,$3) AS stats`, [
+  kHot = sanitizeK(kHot, Number(process.env.PRED_HOT_COUNT || 5));
+  kCold = sanitizeK(kCold, Number(process.env.PRED_COLD_COUNT || 8));
+  const { rows } = await pool.query(`SELECT fn_hot_cold_numbers_json($1,$2,$3,$4) AS stats`, [
     anchorId,
     lookback,
-    k,
+    kHot,
+    kCold,
   ]);
   return nn(rows[0]?.stats);
 }
@@ -154,7 +161,9 @@ async function windowsSummaryAnchor(anchorId, limitSeq = 200) {
   };
 }
 
-export async function allStatsBundle(anchorId, lookback, k = 5) {
+// eslint-disable-next-line no-unused-vars
+export async function allStatsBundle(anchorId, lookback, _k = 8) {
+  // _k parameter kept for backward compatibility but not used - hot/cold now fixed at 5/8
   const verifiedAnchor = await ensureAnchorExists(anchorId);
   if (verifiedAnchor == null) {
     return {
@@ -169,14 +178,13 @@ export async function allStatsBundle(anchorId, lookback, k = 5) {
   }
 
   const LB = await resolveLookback(verifiedAnchor, lookback);
-  k = sanitizeK(k);
 
   const [color, parity, sizeParity, lastDigit, hotcold] = await Promise.all([
     colorFreq(verifiedAnchor, LB),
     parityFreq(verifiedAnchor, LB),
     sizeParityFreq(verifiedAnchor, LB),
     lastDigitFreq(verifiedAnchor, LB),
-    hotCold(verifiedAnchor, LB, k),
+    hotCold(verifiedAnchor, LB),
   ]);
 
   return {
@@ -190,7 +198,7 @@ export async function allStatsBundle(anchorId, lookback, k = 5) {
   };
 }
 
-export async function allStatsForLatestAnchor(lookback, k = 5) {
+export async function allStatsForLatestAnchor(lookback, k = 8) {
   const anchorId = await getLatestAnchorImageId();
   if (anchorId == null) {
     return {
@@ -527,7 +535,7 @@ export async function refreshAnalyticsMaterializedViews() {
 
 export async function advancedAnalyticsBundle(anchorImageId, opts = {}) {
   const rawLB = opts.lookback ?? process.env.PRED_LOOKBACK ?? 200;
-  const k = Number(opts.topk || process.env.PRED_TOPK || 5);
+  const k = Number(opts.topk || process.env.PRED_TOPK || 8);
 
   const LB = await resolveLookback(anchorImageId, rawLB);
 

@@ -75,7 +75,7 @@ export async function analyzeLatestUnprocessed(logger = console) {
 
   const _lb = process.env.PRED_LOOKBACK ?? 200;
   const lookback = String(_lb).toLowerCase() === 'all' ? 'all' : Number(_lb) || 200;
-  const topk = Number(process.env.PRED_TOPK || 5);
+  const topk = Number(process.env.PRED_TOPK || 8);
 
   const [coreStats, gaps_extended, r, color_runs, time_buckets] = await Promise.all([
     allStatsForLatestAnchor(lookback, topk),
@@ -139,6 +139,7 @@ Guidelines:
   try {
     out = JSON.parse(raw);
     logger.log?.('[AIAnalyzer] Parsed AI response:', out);
+    // eslint-disable-next-line no-unused-vars
   } catch (e) {
     logger.warn?.('[AIAnalyzer] Failed to parse JSON, trying regex extraction. Raw:', raw);
     const m = raw.match(/\{[\s\S]*\}/);

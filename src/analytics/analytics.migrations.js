@@ -238,7 +238,7 @@ export async function applyStatsSchema() {
     $$;
 
     -- =============== HOT/COLD numbers (0..27) ===============
-    CREATE OR REPLACE FUNCTION fn_hot_cold_numbers_json(p_anchor_image_id BIGINT, p_lookback INT, p_k INT DEFAULT 3)
+    CREATE OR REPLACE FUNCTION fn_hot_cold_numbers_json(p_anchor_image_id BIGINT, p_lookback INT, p_k_hot INT DEFAULT 5, p_k_cold INT DEFAULT 8)
     RETURNS jsonb
     LANGUAGE plpgsql STABLE AS $$
     DECLARE
@@ -271,18 +271,19 @@ export async function applyStatsSchema() {
         SELECT result, cnt
         FROM counts
         ORDER BY cnt DESC, result ASC
-        LIMIT p_k
+        LIMIT p_k_hot
       ),
       cold AS (
         SELECT result, cnt
         FROM counts
         ORDER BY cnt ASC, result ASC
-        LIMIT p_k
+        LIMIT p_k_cold
       )
       SELECT jsonb_build_object(
         'anchor_image_id', p_anchor_image_id,
         'lookback', p_lookback,
-        'k', p_k,
+        'k_hot', p_k_hot,
+        'k_cold', p_k_cold,
         'hot',  COALESCE((SELECT jsonb_agg(jsonb_build_object('result', result, 'count', cnt)) FROM hot),  '[]'::jsonb),
         'cold', COALESCE((SELECT jsonb_agg(jsonb_build_object('result', result, 'count', cnt)) FROM cold), '[]'::jsonb)
       ) INTO outj;
@@ -291,7 +292,8 @@ export async function applyStatsSchema() {
         jsonb_build_object(
           'anchor_image_id', p_anchor_image_id,
           'lookback', p_lookback,
-          'k', p_k,
+          'k_hot', p_k_hot,
+          'k_cold', p_k_cold,
           'hot', '[]',
           'cold', '[]'
         )::jsonb

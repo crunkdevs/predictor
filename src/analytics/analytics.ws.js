@@ -27,7 +27,7 @@ async function getTopicData(topic, params = {}) {
     case 'core': {
       const anchor = await getLatestAnchorImageId();
       const lookback = p('lookback', Number(process.env.PRED_LOOKBACK || 200));
-      const topk = p('topk', Number(process.env.PRED_TOPK || 5));
+      const topk = p('topk', Number(process.env.PRED_TOPK || 8));
       const coreStats = await allStatsBundle(anchor, lookback, topk);
       return { coreStats };
     }
@@ -88,7 +88,7 @@ async function getTopicData(topic, params = {}) {
     case 'bundle': {
       const anchor = await getLatestAnchorImageId();
       const lookback = p('lookback', Number(process.env.PRED_LOOKBACK || 200));
-      const topk = p('topk', Number(process.env.PRED_TOPK || 5));
+      const topk = p('topk', Number(process.env.PRED_TOPK || 8));
       const payload = await advancedAnalyticsBundle(anchor, { lookback, topk });
       return payload;
     }

@@ -273,7 +273,7 @@ async function topicV2(topic, params = {}) {
       const lookback = pnum(params.lookback, 200);
       const [coreStats, gaps_extended, r, color_runs, recent_spins, time_buckets, windows] =
         await Promise.all([
-          allStatsForLatestAnchor(lookback, pnum(params.topk, 5)),
+          allStatsForLatestAnchor(lookback, pnum(params.topk, 8)),
           gapStatsExtended(Math.max(lookback, 500)),
           ratios(Math.min(lookback, 200)),
           recentColorRuns(pnum(params.crLimit, 50)),
