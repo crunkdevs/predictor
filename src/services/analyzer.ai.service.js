@@ -89,9 +89,9 @@ export async function analyzeLatestUnprocessed(logger = console) {
 
   const instruction = `
 You are a roulette analytics assistant.
-Predict the most probable next number (0-27) using JSON only:
+Predict the most probable next numbers (0-27) using JSON only:
 {
-  "predicted_numbers": [top5],
+  "predicted_numbers": [13 numbers in order of probability, top 13 candidates],
   "confidence": number(0-1)
 }
 
@@ -99,6 +99,7 @@ Guidelines:
 - Base your reasoning on color, parity, and streak stability.
 - Use gaps and ratios for weighting.
 - Prefer balanced candidates across clusters.
+- Return exactly 13 numbers, ranked from most to least probable.
 `.trim();
 
   const payload = {
@@ -182,7 +183,15 @@ Guidelines:
     logger.warn?.('[AIAnalyzer] Failed to get pattern info:', e?.message || e);
   }
 
-  const top_candidates = nums.map((n) => ({
+  // Ensure we have at least 13 numbers, pad with remaining if needed
+  const allNums = nums.slice(0, 13);
+  while (allNums.length < 13) {
+    for (let n = 0; n <= 27 && allNums.length < 13; n++) {
+      if (!allNums.includes(n)) allNums.push(n);
+    }
+  }
+
+  const top_candidates = allNums.map((n) => ({
     result: n,
     color: numToColor(n),
     prob: conf / len,
@@ -190,7 +199,8 @@ Guidelines:
     size: sizeOf(n),
   }));
 
-  const top5 = nums.slice(0, 5);
+  const top5 = allNums.slice(0, 5);
+  const pool = allNums.slice(5, 13); // Next 8 items for pool
 
   return {
     allowed: true,
@@ -198,9 +208,9 @@ Guidelines:
     pattern_scores,
     last,
     top5,
+    pool,
     top_candidates,
     confidence: conf,
-    pool: nums, // AI pool is the predicted numbers
     ranked: top_candidates.map((c, idx) => ({
       n: c.result,
       score: conf / len - idx * 0.01, // Simple ranking
