@@ -53,13 +53,38 @@ export async function processOutcomeForImage(imageId) {
   if (evaluatedOn != null) return;
 
   const pj = pred.prediction || {};
-  let top5 = Array.isArray(pj.top5) ? pj.top5.map(Number) : null;
-  if (!top5 || !top5.length) {
-    const cand = Array.isArray(pj.top_candidates) ? pj.top_candidates : [];
-    top5 = cand.slice(0, 5).map((c) => Number(c.result));
+  
+  // Get hot numbers (top 5)
+  let hotNumbers = [];
+  if (Array.isArray(pj.top5) && pj.top5.length > 0) {
+    hotNumbers = pj.top5.map(Number).filter((n) => Number.isFinite(n) && n >= 0 && n <= 27);
+  } else if (Array.isArray(pj.top_candidates) && pj.top_candidates.length > 0) {
+    // Fallback: extract from top_candidates (first 5)
+    hotNumbers = pj.top_candidates
+      .slice(0, 5)
+      .map((c) => Number(c?.result ?? c))
+      .filter((n) => Number.isFinite(n) && n >= 0 && n <= 27);
   }
 
-  const correct = Array.isArray(top5) && top5.includes(actual);
+  // Get cold numbers (pool - numbers ranked 6-13)
+  let coldNumbers = [];
+  if (Array.isArray(pj.pool) && pj.pool.length > 0) {
+    coldNumbers = pj.pool.map(Number).filter((n) => Number.isFinite(n) && n >= 0 && n <= 27);
+  } else if (Array.isArray(pj.top_candidates) && pj.top_candidates.length > 5) {
+    // Fallback: extract from top_candidates (numbers after top 5)
+    coldNumbers = pj.top_candidates
+      .slice(5)
+      .map((c) => Number(c?.result ?? c))
+      .filter((n) => Number.isFinite(n) && n >= 0 && n <= 27);
+  }
+
+  // Combine hot and cold numbers, remove duplicates
+  const allPredictedNumbers = Array.from(
+    new Set([...hotNumbers, ...coldNumbers])
+  );
+
+  // Prediction is correct if actual result is in either hot or cold numbers
+  const correct = allPredictedNumbers.length > 0 && allPredictedNumbers.includes(actual);
 
   await pool.query(
     `UPDATE predictions
