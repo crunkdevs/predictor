@@ -37,6 +37,44 @@ async function withAnalyzeLock(fn, logger = console) {
   }
 }
 
+/**
+ * Get images that have stats but no predictions yet
+ * This ensures we only create predictions for images that don't have one yet
+ */
+async function getImagesNeedingPrediction(windowId, limit = 1) {
+  const { rows } = await pool.query(
+    `SELECT s.image_id, s.result, s.screen_shot_time
+     FROM image_stats s
+     LEFT JOIN predictions p ON p.based_on_image_id = s.image_id
+     JOIN windows w ON w.start_at <= s.screen_shot_time AND w.end_at > s.screen_shot_time
+     WHERE w.id = $1
+       AND p.id IS NULL
+     ORDER BY s.screen_shot_time ASC
+     LIMIT $2`,
+    [windowId, limit]
+  );
+  return rows;
+}
+
+/**
+ * Check if AI is currently active for this window
+ * AI is active if there's an AI prediction that hasn't been evaluated yet (no 'correct' field)
+ * This blocks local predictions until the AI prediction is evaluated
+ */
+async function isAIActive(windowId) {
+  const { rows } = await pool.query(
+    `SELECT 1
+     FROM predictions
+     WHERE window_id = $1
+       AND source = 'ai'
+       AND (prediction ? 'correct') = false
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [windowId]
+  );
+  return rows.length > 0;
+}
+
 export async function analyzeV2(logger = console) {
   return withAnalyzeLock(async () => {
     const now = new Date();
@@ -48,26 +86,37 @@ export async function analyzeV2(logger = console) {
       return null;
     }
 
-    const DEBOUNCE_SEC = Number(process.env.PRED_DEBOUNCE_SEC || 15);
-    {
-      const { rows } = await pool.query(
-        `SELECT 1
-       FROM predictions
-      WHERE window_id = $1
-        AND created_at >= now() - make_interval(secs => $2)
-      ORDER BY id DESC
-      LIMIT 1`,
-        [window.id, DEBOUNCE_SEC]
-      );
-      if (rows.length) {
-        logger.log?.(`[AnalyzerV2] Debounced: prediction already made in last ${DEBOUNCE_SEC}s`);
-        return null;
-      }
+    const { id: windowId } = window;
+
+    // Check if there are images that need predictions
+    const imagesNeedingPrediction = await getImagesNeedingPrediction(windowId, 1);
+    if (!imagesNeedingPrediction.length) {
+      logger.log?.('[AnalyzerV2] No images needing prediction.');
+      return null;
     }
 
-    await pool.query(`SELECT id FROM windows WHERE id = $1 FOR UPDATE`, [window.id]);
+    const imageData = imagesNeedingPrediction[0];
+    const imageId = imageData.image_id;
 
-    const { id: windowId } = window;
+    // Check if prediction already exists for this image (double-check)
+    const { rows: predCheck } = await pool.query(
+      `SELECT 1 FROM predictions WHERE based_on_image_id = $1 LIMIT 1`,
+      [imageId]
+    );
+    if (predCheck.length) {
+      logger.log?.(`[AnalyzerV2] Prediction already exists for image=${imageId}`);
+      return null;
+    }
+
+    await pool.query(`SELECT id FROM windows WHERE id = $1 FOR UPDATE`, [windowId]);
+
+    // Check if AI is active - if yes, block local predictions
+    const aiActive = await isAIActive(windowId);
+    if (aiActive) {
+      logger.log?.('[AnalyzerV2] ⏸️ AI is active, blocking local predictions');
+      return null;
+    }
+
     const can = await canPredict(windowId, { channel: 'local' });
     if (!can.can) {
       logger.log?.(`[AnalyzerV2] ⏸️ Prediction blocked (${can.reason}) until ${can.until}`);
@@ -230,12 +279,15 @@ export async function analyzeV2(logger = console) {
         if (aiCan.can) {
           logger.log?.('[AnalyzerV2] 🤖 AI Trigger activated. Reason:', aiGate.reason);
           try {
+            // AI creates prediction for the same image
             prediction = await analyzeLatestUnprocessed(logger);
             if (prediction) {
               source = 'ai';
               logger.log?.('[AnalyzerV2] ✅ AI prediction generated successfully');
             } else {
-              logger.warn?.('[AnalyzerV2] AI prediction returned null, falling back to local');
+              // AI failed, but we still need a prediction for this image
+              // Create local prediction instead
+              logger.warn?.('[AnalyzerV2] AI prediction returned null, using local prediction');
               const lp = await localPredict({ windowId, context: baseContext });
               if (lp?.allowed) {
                 prediction = lp;
@@ -248,6 +300,7 @@ export async function analyzeV2(logger = console) {
           } catch (aiError) {
             logger.error?.('[AnalyzerV2] AI prediction failed:', aiError?.message || aiError);
             logger.error?.('[AnalyzerV2] AI error stack:', aiError?.stack);
+            // AI failed, create local prediction for this image
             logger.log?.('[AnalyzerV2] Falling back to local prediction due to AI error');
             const lp = await localPredict({ windowId, context: baseContext });
             if (lp?.allowed) {
@@ -259,6 +312,7 @@ export async function analyzeV2(logger = console) {
             }
           }
         } else {
+          // AI can't predict, use local
           logger.log?.('[AnalyzerV2] AI gated:', aiCan.reason, aiCan.until || '');
           const lp = await localPredict({ windowId, context: baseContext });
           if (lp?.allowed) {
@@ -270,6 +324,7 @@ export async function analyzeV2(logger = console) {
           }
         }
       } else {
+        // AI not triggered, use local prediction
         logger.log?.('[AnalyzerV2] AI not triggered. Reason:', aiGate?.reason || 'unknown');
         const lp = await localPredict({ windowId, context: baseContext });
         if (lp?.allowed) {
@@ -291,33 +346,29 @@ export async function analyzeV2(logger = console) {
       return null;
     }
 
-    {
-      const { rows: doubleCheck } = await pool.query(
-        `SELECT 1
-         FROM predictions
-        WHERE window_id = $1
-          AND created_at >= now() - make_interval(secs => $2)
-        LIMIT 1`,
-        [windowId, DEBOUNCE_SEC]
-      );
-      if (doubleCheck.length) {
-        logger.log?.(
-          '[AnalyzerV2] Duplicate prevented: prediction exists after window lock check.'
-        );
-        return null;
-      }
+    // Final check: make sure no prediction exists for this image (race condition protection)
+    const { rows: finalCheck } = await pool.query(
+      `SELECT 1 FROM predictions WHERE based_on_image_id = $1 LIMIT 1`,
+      [imageId]
+    );
+    if (finalCheck.length) {
+      logger.log?.('[AnalyzerV2] Duplicate prevented: prediction exists for image after lock.');
+      return null;
     }
 
+    // Insert prediction with based_on_image_id to ensure 1 prediction per image
     const { rows: ins } = await pool.query(
       `
   INSERT INTO predictions (based_on_image_id, summary, prediction, source, window_id)
-  VALUES (NULL, $2::jsonb, $3::jsonb, $4::text, $1::bigint)
+  VALUES ($5, $2::jsonb, $3::jsonb, $4::text, $1::bigint)
+  ON CONFLICT (based_on_image_id) DO NOTHING
   RETURNING id
   `,
       [
         windowId,
         JSON.stringify({
           window_id: windowId,
+          image_id: imageId,
           pattern,
           metrics,
           source,
@@ -328,6 +379,7 @@ export async function analyzeV2(logger = console) {
         }),
         JSON.stringify(prediction),
         source,
+        imageId,
       ]
     );
 

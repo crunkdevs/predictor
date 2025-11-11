@@ -34,4 +34,6 @@ router.get('/v2/accuracy/windows', v2.windowAccuracy);
 
 router.get('/v2/trend/reversal-bias', v2.reversalBias);
 
+router.get('/v2/timezone', v2.getTimezone);
+
 export default router;

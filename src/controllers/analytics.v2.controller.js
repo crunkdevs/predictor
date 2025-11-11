@@ -46,6 +46,16 @@ export async function reversalBias(req, res) {
   }
 }
 
+export async function getTimezone(req, res) {
+  try {
+    const tz = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
+    res.json({ ok: true, timezone: tz });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+}
+
 export async function windowAccuracy(req, res) {
   try {
     const days = Math.max(1, Math.min(90, Number(req.query.days || 30)));
