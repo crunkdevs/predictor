@@ -56,6 +56,10 @@ export async function windowAccuracy(req, res) {
         COUNT(*) FILTER (WHERE (p.prediction ? 'correct')) AS evaluated,
         COUNT(*) FILTER (WHERE (p.prediction->>'correct')::boolean IS TRUE) AS correct,
         COUNT(*) FILTER (WHERE (p.prediction->>'correct')::boolean IS FALSE) AS wrong,
+        COUNT(*) FILTER (WHERE p.source = 'local') AS local_predictions,
+        COUNT(*) FILTER (WHERE p.source = 'ai') AS ai_predictions,
+        COUNT(*) FILTER (WHERE p.source IS NULL OR p.source = '') AS null_source_predictions,
+        COUNT(DISTINCT w.day_date) AS window_days,
         ROUND(
           100.0 *
           COUNT(*) FILTER (WHERE (p.prediction->>'correct')::boolean IS TRUE)
