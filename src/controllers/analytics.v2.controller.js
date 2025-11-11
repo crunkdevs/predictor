@@ -52,6 +52,7 @@ export async function windowAccuracy(req, res) {
     const q = `
       SELECT
         w.window_idx,
+        COUNT(*) AS total_predictions,
         COUNT(*) FILTER (WHERE (p.prediction ? 'correct')) AS evaluated,
         COUNT(*) FILTER (WHERE (p.prediction->>'correct')::boolean IS TRUE) AS correct,
         COUNT(*) FILTER (WHERE (p.prediction->>'correct')::boolean IS FALSE) AS wrong,
