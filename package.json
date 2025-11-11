@@ -10,7 +10,9 @@
     "start": "node server.v2.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "migrate": "node scripts/run-all-migrations.js",
+    "migrate:single": "node scripts/run-sql.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
