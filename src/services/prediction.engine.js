@@ -206,6 +206,21 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
     }
   }
 
+  // Add overdue numbers that fit the current pattern context
+  // Only if pool still needs more numbers after pattern-specific logic
+  if (poolSet.size < POOL_SIZE) {
+    const OVERDUE_THRESHOLD = Number(process.env.OVERDUE_THRESHOLD || 50);
+    const overdueCandidates = Object.keys(sinceMap)
+      .map((k) => ({ n: Number(k), since: sinceMap[k] == null ? Infinity : Number(sinceMap[k]) }))
+      .filter((x) => Number.isFinite(x.n) && x.since >= OVERDUE_THRESHOLD)
+      .sort((a, b) => (b.since === a.since ? a.n - b.n : b.since - a.since));
+
+    for (const c of overdueCandidates) {
+      if (poolSet.size >= POOL_SIZE) break;
+      if (!poolSet.has(c.n)) poolSet.add(c.n);
+    }
+  }
+
   if (poolSet.size < POOL_SIZE) {
     for (let n = 0; n <= 27 && poolSet.size < POOL_SIZE; n++) {
       if (!poolSet.has(n)) poolSet.add(n);
