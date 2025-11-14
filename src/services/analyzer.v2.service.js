@@ -283,6 +283,15 @@ export async function analyzeV2(logger = console) {
             prediction = await analyzeLatestUnprocessed(logger);
             if (prediction) {
               source = 'ai';
+              // Update AI prediction with window_id and source
+              if (prediction.imageId && windowId) {
+                await pool.query(
+                  `UPDATE predictions 
+                   SET window_id = $1, source = $2, updated_at = now()
+                   WHERE based_on_image_id = $3`,
+                  [windowId, 'ai', prediction.imageId]
+                );
+              }
               logger.log?.('[AnalyzerV2] ✅ AI prediction generated successfully');
             } else {
               // AI failed, but we still need a prediction for this image
@@ -357,33 +366,43 @@ export async function analyzeV2(logger = console) {
     }
 
     // Insert prediction with based_on_image_id to ensure 1 prediction per image
-    const { rows: ins } = await pool.query(
-      `
+    // Note: We already checked for duplicates above, but handle race conditions gracefully
+    let predId = null;
+    try {
+      const { rows: ins } = await pool.query(
+        `
   INSERT INTO predictions (based_on_image_id, summary, prediction, source, window_id)
   VALUES ($5, $2::jsonb, $3::jsonb, $4::text, $1::bigint)
-  ON CONFLICT (based_on_image_id) DO NOTHING
   RETURNING id
   `,
-      [
-        windowId,
-        JSON.stringify({
-          window_id: windowId,
-          image_id: imageId,
-          pattern,
-          metrics,
+        [
+          windowId,
+          JSON.stringify({
+            window_id: windowId,
+            image_id: imageId,
+            pattern,
+            metrics,
+            source,
+            reactivation,
+            deviationSignal,
+            reversalSignal,
+            trendDetail,
+          }),
+          JSON.stringify(prediction),
           source,
-          reactivation,
-          deviationSignal,
-          reversalSignal,
-          trendDetail,
-        }),
-        JSON.stringify(prediction),
-        source,
-        imageId,
-      ]
-    );
+          imageId,
+        ]
+      );
+      predId = ins?.[0]?.id;
+    } catch (insertError) {
+      // Handle duplicate key error (if unique constraint exists) or other insert errors
+      if (insertError?.code === '23505' || insertError?.message?.includes('duplicate')) {
+        logger.log?.('[AnalyzerV2] Duplicate prediction prevented by database constraint');
+        return null;
+      }
+      throw insertError; // Re-throw other errors
+    }
 
-    const predId = ins?.[0]?.id;
     if (!predId) {
       logger.error?.('[AnalyzerV2] Insert failed unexpectedly - no ID returned.');
       return null;
