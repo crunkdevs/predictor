@@ -109,6 +109,101 @@ async function getTransitionsWindowed(fromN, windowIdx, topK = 12) {
   return rows.map((r) => ({ to: Number(r.to_n), c: Number(r.count) }));
 }
 
+// Smart Overdue Configuration
+const OVERDUE_CONFIG = {
+  MIN_GAP_SPINS: 40, // to consider as overdue candidate
+  MIN_GLOBAL_OVERDUE_COUNT: 6, // must have 6+ overdue candidates
+  MIN_SAMPLES: 10, // min history samples required
+  MIN_CONTEXT_SUCCESS: 0.4, // min 40% success rate for this prev_color
+  MAX_OVERDUE_PER_PREDICTION: 1, // allow at most 1 overdue number per prediction
+};
+
+/**
+ * Get overdue statistics for a specific number given a context (prev_color)
+ * @param {number} number - The number to check
+ * @param {string} ctxPrevColor - The previous color context
+ * @returns {Promise<Object|null>} - Stats object or null if no history
+ */
+async function getOverdueStatsForNumber(number, ctxPrevColor) {
+  if (!Number.isFinite(number) || number < 0 || number > 27) return null;
+  if (!ctxPrevColor) return null;
+
+  const { rows } = await pool.query(
+    `SELECT 
+      COUNT(*)::int AS total_hits,
+      SUM(CASE WHEN prev_color = $2 THEN 1 ELSE 0 END)::int AS context_hits
+    FROM overdue_events
+    WHERE number = $1`,
+    [number, ctxPrevColor]
+  );
+
+  if (!rows.length || !rows[0] || rows[0].total_hits === 0) return null;
+
+  const row = rows[0];
+  return {
+    totalHits: row.total_hits,
+    contextHits: row.context_hits,
+    successRate: row.context_hits / row.total_hits,
+  };
+}
+
+/**
+ * Smart overdue picker - selects overdue numbers based on historical context
+ * @param {Array<number>} pool - Current pool array
+ * @param {Object} context - Context object with gapsByNumber, prevColor, db
+ * @returns {Promise<Array<number>>} - Updated pool with smart overdue numbers added
+ */
+async function pickSmartOverdues(pool, context) {
+  const { gapsByNumber, prevColor } = context;
+
+  if (!prevColor) return pool; // Need context to make smart decisions
+
+  // 1) Collect overdue candidates
+  const overdueCandidates = [];
+  for (let n = 0; n <= 27; n++) {
+    const gap = gapsByNumber[n];
+    if (Number.isFinite(gap) && gap >= OVERDUE_CONFIG.MIN_GAP_SPINS) {
+      overdueCandidates.push(n);
+    }
+  }
+
+  // If not enough overdue numbers, skip
+  if (overdueCandidates.length < OVERDUE_CONFIG.MIN_GLOBAL_OVERDUE_COUNT) {
+    return pool;
+  }
+
+  const scored = [];
+
+  // 2) Evaluate each overdue number based on history
+  for (const n of overdueCandidates) {
+    const stats = await getOverdueStatsForNumber(n, prevColor);
+    if (!stats) continue;
+
+    const { totalHits, successRate } = stats;
+
+    if (totalHits < OVERDUE_CONFIG.MIN_SAMPLES) continue;
+    if (successRate < OVERDUE_CONFIG.MIN_CONTEXT_SUCCESS) continue;
+
+    const gap = gapsByNumber[n] || 0;
+    scored.push({ n, successRate, gap });
+  }
+
+  // 3) Sort by success rate + gap
+  scored.sort((a, b) => b.successRate - a.successRate || b.gap - a.gap);
+
+  // 4) Add max 1 overdue number
+  let added = 0;
+  for (const { n } of scored) {
+    if (added >= OVERDUE_CONFIG.MAX_OVERDUE_PER_PREDICTION) break;
+    if (!pool.includes(n) && pool.length < POOL_SIZE) {
+      pool.push(n);
+      added++;
+    }
+  }
+
+  return pool;
+}
+
 export async function identifyActivePattern(context = {}) {
   const _lb = process.env.PRED_LOOKBACK ?? 200;
   const lookback = String(_lb).toLowerCase() === 'all' ? 200 : Number(_lb) || 200;
@@ -206,18 +301,25 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
     }
   }
 
-  // Add overdue numbers that fit the current pattern context
-  // Only if pool still needs more numbers after pattern-specific logic
+  // Smart overdue selection - replace old overdue fallback
   if (poolSet.size < POOL_SIZE) {
-    const OVERDUE_THRESHOLD = Number(process.env.OVERDUE_THRESHOLD || 50);
-    const overdueCandidates = Object.keys(sinceMap)
-      .map((k) => ({ n: Number(k), since: sinceMap[k] == null ? Infinity : Number(sinceMap[k]) }))
-      .filter((x) => Number.isFinite(x.n) && x.since >= OVERDUE_THRESHOLD)
-      .sort((a, b) => (b.since === a.since ? a.n - b.n : b.since - a.since));
+    const currentPool = Array.from(poolSet);
+    const lastColor = Number.isFinite(last) ? numToColor(last) : null;
+    const gapsByNumber = {};
+    for (let n = 0; n <= 27; n++) {
+      const gap = sinceMap[String(n)];
+      gapsByNumber[n] = gap == null ? Infinity : Number(gap);
+    }
 
-    for (const c of overdueCandidates) {
+    const poolWithOverdues = await pickSmartOverdues(currentPool, {
+      gapsByNumber,
+      prevColor: lastColor,
+    });
+
+    // Add smart overdue numbers to poolSet
+    for (const n of poolWithOverdues) {
       if (poolSet.size >= POOL_SIZE) break;
-      if (!poolSet.has(c.n)) poolSet.add(c.n);
+      if (!poolSet.has(n)) poolSet.add(n);
     }
   }
 

@@ -1,5 +1,6 @@
 import { pool } from '../config/db.config.js';
 import { handleOutcome } from './analyzer.v2.service.js';
+import { numToColor, parityOf } from './prediction.engine.js';
 
 /**
  * Calculate if a prediction is correct based on hot and cold numbers
@@ -107,6 +108,52 @@ export async function processOutcomeForImage(imageId) {
     windowId,
     spinTs: ts,
   });
+
+  // Log overdue events when gapSpins >= 40
+  // Calculate gap by counting how many results occurred since this number last appeared
+  try {
+    const { rows: gapRows } = await pool.query(
+      `SELECT COUNT(*)::int AS gap_spins
+       FROM image_stats
+       WHERE screen_shot_time < $1
+         AND result != $2
+         AND screen_shot_time > COALESCE(
+           (SELECT screen_shot_time
+            FROM image_stats
+            WHERE result = $2
+              AND screen_shot_time < $1
+            ORDER BY screen_shot_time DESC
+            LIMIT 1),
+           '1970-01-01'::timestamptz
+         )`,
+      [ts, actual]
+    );
+    const gapSpins = gapRows?.[0]?.gap_spins ?? 0;
+
+    if (gapSpins >= 40) {
+      // Get window index if available
+      const { rows: winIdxRows } = await pool.query(
+        `SELECT window_idx FROM windows WHERE id = $1 LIMIT 1`,
+        [windowId]
+      );
+      const windowIndex = winIdxRows?.[0]?.window_idx ?? null;
+
+      // Get previous number's color and parity
+      const prevColor = Number.isFinite(prev) ? numToColor(prev) : null;
+      const prevParity = Number.isFinite(prev) ? parityOf(prev) : null;
+
+      await pool.query(
+        `INSERT INTO overdue_events
+          (occurred_at, number, gap_spins, prev_number, prev_color, prev_parity, window_index)
+        VALUES
+          (NOW(), $1, $2, $3, $4, $5, $6)`,
+        [actual, gapSpins, Number.isFinite(prev) ? prev : null, prevColor, prevParity, windowIndex]
+      );
+    }
+  } catch (e) {
+    // Log but don't fail the outcome processing
+    console.warn('[processOutcomeForImage] Failed to log overdue event:', e?.message || e);
+  }
 }
 
 /**

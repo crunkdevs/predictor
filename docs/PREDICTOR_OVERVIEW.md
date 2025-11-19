@@ -117,21 +117,11 @@ When making a prediction, the system builds a pool of candidate numbers:
   - Adds numbers that haven't appeared recently
   - Prioritizes numbers with longest gaps
 
-**Step 4: Smart Overdue Selection (NEW)**
+**Step 4: Overdue Number Fallback**
 - If pool still needs numbers:
-  - Uses context-aware overdue selection instead of simple fallback
-  - **How it works:**
-    - System tracks when overdue numbers (gap >= 40 spins) actually hit
-    - Remembers the context: what was the previous number's color when this overdue number hit?
-    - When selecting overdue numbers, looks at historical patterns:
-      - "When number X was overdue, did it hit more often after Red numbers or Blue numbers?"
-    - Only picks overdue numbers that have a good historical track record in the current context
-    - Requires sufficient historical data (at least 10 past occurrences) before trusting a pattern
-    - Adds at most **1 smart overdue number** to the pool
-  - **Why this is better:**
-    - Old method: Just picked any overdue number (gap >= 50)
-    - New method: Picks overdue numbers that historically hit in similar situations
-    - Learns from past: "Number 15 tends to hit when overdue after Red numbers"
+  - Finds numbers that haven't appeared in the overdue threshold
+  - Overdue threshold: **50 spins**
+  - Adds them sorted by how overdue they are
 
 **Step 5: Complete Fill**
 - If pool still has fewer than 13 numbers:
@@ -682,76 +672,3 @@ The system runs scheduled tasks to:
    - If reactivation used, records outcome
 
 **Result:** System has made a new prediction and learned from the outcome, ready for the next cycle.
-
-## Smart Overdue Logic - How It Works
-
-### The Concept
-
-Instead of blindly picking any overdue number, the system now learns from history: "When overdue numbers hit, what was the situation like?" It remembers the context (like what color came before) and uses that to make smarter selections.
-
-### The Learning Process
-
-**1. Tracking Overdue Hits:**
-- When a number hits after being overdue (gap >= 40 spins), the system remembers:
-  - Which number hit
-  - How overdue it was
-  - What the previous number was (especially its color)
-  - When it happened (which time window)
-
-**2. Pattern Recognition:**
-- Over time, the system builds patterns like:
-  - "Number 15 tends to hit when overdue, especially after Red numbers"
-  - "Number 22 rarely hits when overdue after Blue numbers"
-- These patterns are stored and used for future predictions
-
-### The Selection Process
-
-When the pool needs more numbers:
-
-1. **Find Overdue Candidates:**
-   - Looks for numbers that haven't appeared in 40+ spins
-   - Needs at least 6 such numbers before considering smart selection
-
-2. **Check Historical Patterns:**
-   - For each overdue number, asks: "Has this number hit when overdue in similar situations before?"
-   - Compares current context (last number's color) with historical patterns
-   - Calculates success rate: "Out of all times this number was overdue, how often did it hit with this color context?"
-
-3. **Filter and Rank:**
-   - Only considers numbers with:
-     - At least 10 historical occurrences (enough data to trust)
-     - At least 40% success rate in this context (proven pattern)
-   - Ranks by: success rate first, then how overdue (larger gap = higher priority)
-
-4. **Select:**
-   - Picks the best candidate (if any meet the criteria)
-   - Adds at most 1 smart overdue number to the pool
-
-### Why This Is Better
-
-**Old Method:**
-- Simple rule: "If gap >= 50, add it"
-- No learning, no context
-- Could pick numbers that historically don't work in current situation
-
-**New Method:**
-- Learns from past: "This number works in this context"
-- Context-aware: Matches current situation with historical patterns
-- Conservative: Only acts when there's enough evidence
-- Improves over time: More data = better patterns
-
-### Example
-
-**Scenario:**
-- Last number: 5 (Red)
-- Number 15 is overdue (hasn't appeared in 45 spins)
-- Number 20 is overdue (hasn't appeared in 52 spins)
-
-**Old Method:**
-- Would pick 20 (larger gap) or both
-
-**New Method:**
-- Checks history: "When 15 was overdue, did it hit more after Red numbers?"
-- Checks history: "When 20 was overdue, did it hit more after Red numbers?"
-- If 15 has 60% success rate after Red (with 15+ samples) and 20 has 30% success rate after Red
-- Picks 15 (better historical match for current context)
