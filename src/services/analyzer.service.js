@@ -157,7 +157,7 @@ function buildBaselinePrior(bundle, cfg = {}) {
       const c = numToColor(i);
       if (!c) continue;
       const isCool = c === 'Dark Blue' || c === 'Sky Blue' || c === 'Green';
-      const isWarm = c === 'Red' || c === 'Orange' || c === 'Pink';
+      const isWarm = c === 'Pink'; // Red and Orange excluded
       const isNeutral = c === 'Gray';
       if (
         (target === 'Cool' && isCool) ||

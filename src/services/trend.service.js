@@ -26,11 +26,12 @@ export async function detectTrendReversal({
       ),
       color_raw AS (
         SELECT
-          SUM((result_color IN ('Red','Orange','Pink'))::int)::float AS warm,
+          SUM((result_color = 'Pink')::int)::float AS warm,
           SUM((result_color IN ('Dark Blue','Sky Blue','Green'))::int)::float AS cool,
           SUM((result_color = 'Gray')::int)::float AS neutral,
           COUNT(*)::float AS total
         FROM base
+        WHERE result_color NOT IN ('Red', 'Orange')
       ),
       size_raw AS (
         SELECT

@@ -47,6 +47,7 @@ export async function applyStatsSchema() {
         SELECT result_color
         FROM v_spins
         WHERE screen_shot_time < t_anchor
+          AND result_color NOT IN ('Red', 'Orange')
         ORDER BY screen_shot_time DESC
         LIMIT p_lookback
       ),

@@ -320,24 +320,28 @@ export async function timeBucketsSnapshot() {
       SELECT result_color, COUNT(*) AS c
       FROM v_spins_buckets, nowts
       WHERE screen_shot_time >= (t - interval '60 minutes')
+        AND result_color NOT IN ('Red', 'Orange')
       GROUP BY result_color
     ),
     last_30 AS (
       SELECT result_color, COUNT(*) AS c
       FROM v_spins_buckets, nowts
       WHERE screen_shot_time >= (t - interval '30 minutes')
+        AND result_color NOT IN ('Red', 'Orange')
       GROUP BY result_color
     ),
     last_10 AS (
       SELECT result_color, COUNT(*) AS c
       FROM v_spins_buckets, nowts
       WHERE screen_shot_time >= (t - interval '10 minutes')
+        AND result_color NOT IN ('Red', 'Orange')
       GROUP BY result_color
     ),
     daypart AS (
       SELECT daypart, result_color, COUNT(*) AS c
       FROM v_spins_buckets
       WHERE screen_shot_time >= now() - interval '24 hours'
+        AND result_color NOT IN ('Red', 'Orange')
       GROUP BY daypart, result_color
     )
     SELECT

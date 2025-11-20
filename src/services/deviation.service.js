@@ -17,12 +17,14 @@ export async function detectFrequencyDeviation({ shortM = 30, longH = 6 } = {}) 
       SELECT result_color, COUNT(*) AS c
       FROM v_spins
       WHERE screen_shot_time >= now() - INTERVAL '${shortWindow}'
+        AND result_color NOT IN ('Red', 'Orange')
       GROUP BY result_color
     ),
     long AS (
       SELECT result_color, COUNT(*) AS c
       FROM v_spins
       WHERE screen_shot_time >= now() - INTERVAL '${longWindow}'
+        AND result_color NOT IN ('Red', 'Orange')
       GROUP BY result_color
     ),
     joined AS (

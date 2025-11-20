@@ -31,6 +31,28 @@ const COLOR_MAP = {
   Green: [10, 11, 16, 17],
   Gray: [12, 13, 14, 15],
 };
+
+// Excluded colors: Orange and Red - no predictions or stats for these
+const EXCLUDED_NUMBERS = new Set([...COLOR_MAP.Red, ...COLOR_MAP.Orange]); // [0, 1, 2, 3, 24, 25, 26, 27]
+
+/**
+ * Check if a number should be excluded from predictions and stats
+ * @param {number} n - Number to check
+ * @returns {boolean} - True if number should be excluded
+ */
+export function isExcludedNumber(n) {
+  return EXCLUDED_NUMBERS.has(Number(n));
+}
+
+/**
+ * Filter array of numbers to exclude Orange/Red numbers
+ * @param {Array<number>} numbers - Array of numbers to filter
+ * @returns {Array<number>} - Filtered array without excluded numbers
+ */
+export function filterExcludedNumbers(numbers) {
+  return numbers.filter((n) => !isExcludedNumber(n));
+}
+
 export function numToColor(n) {
   n = Number(n);
   for (const [c, arr] of Object.entries(COLOR_MAP)) if (arr.includes(n)) return c;
@@ -158,9 +180,10 @@ async function pickSmartOverdues(pool, context) {
 
   if (!prevColor) return pool; // Need context to make smart decisions
 
-  // 1) Collect overdue candidates
+  // 1) Collect overdue candidates (exclude Orange/Red)
   const overdueCandidates = [];
   for (let n = 0; n <= 27; n++) {
+    if (isExcludedNumber(n)) continue;
     const gap = gapsByNumber[n];
     if (Number.isFinite(gap) && gap >= OVERDUE_CONFIG.MIN_GAP_SPINS) {
       overdueCandidates.push(n);
@@ -260,7 +283,9 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
 
   for (const t of trans) {
     if (poolSet.size >= POOL_SIZE) break;
-    poolSet.add(t.to);
+    if (!isExcludedNumber(t.to)) {
+      poolSet.add(t.to);
+    }
   }
 
   const react = context.reactivation || null;
@@ -268,7 +293,7 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
   const reactPool = Array.isArray(react?.snapshot_top_pool)
     ? react.snapshot_top_pool
         .map((n) => Number(n))
-        .filter((n) => Number.isFinite(n) && n >= 0 && n <= 27)
+        .filter((n) => Number.isFinite(n) && n >= 0 && n <= 27 && !isExcludedNumber(n))
     : [];
 
   if (reactOk && reactPool.length) {
@@ -286,6 +311,7 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
     const wantSize = sizeOf(last) === 'small' ? 'big' : 'small';
     for (let n = 0; n <= 27 && poolSet.size < POOL_SIZE; n++) {
       if (poolSet.has(n)) continue;
+      if (isExcludedNumber(n)) continue;
       if (parityOf(n) === wantParity || sizeOf(n) === wantSize) poolSet.add(n);
     }
   }
@@ -293,7 +319,7 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
   if (poolSet.size < POOL_SIZE && pattern_code === 'C') {
     const candidates = Object.keys(sinceMap)
       .map((k) => ({ n: Number(k), since: sinceMap[k] == null ? Infinity : Number(sinceMap[k]) }))
-      .filter((x) => Number.isFinite(x.n))
+      .filter((x) => Number.isFinite(x.n) && !isExcludedNumber(x.n))
       .sort((a, b) => (b.since === a.since ? a.n - b.n : b.since - a.since));
     for (const c of candidates) {
       if (poolSet.size >= POOL_SIZE) break;
@@ -307,6 +333,7 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
     const lastColor = Number.isFinite(last) ? numToColor(last) : null;
     const gapsByNumber = {};
     for (let n = 0; n <= 27; n++) {
+      if (isExcludedNumber(n)) continue;
       const gap = sinceMap[String(n)];
       gapsByNumber[n] = gap == null ? Infinity : Number(gap);
     }
@@ -319,13 +346,13 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
     // Add smart overdue numbers to poolSet
     for (const n of poolWithOverdues) {
       if (poolSet.size >= POOL_SIZE) break;
-      if (!poolSet.has(n)) poolSet.add(n);
+      if (!poolSet.has(n) && !isExcludedNumber(n)) poolSet.add(n);
     }
   }
 
   if (poolSet.size < POOL_SIZE) {
     for (let n = 0; n <= 27 && poolSet.size < POOL_SIZE; n++) {
-      if (!poolSet.has(n)) poolSet.add(n);
+      if (!poolSet.has(n) && !isExcludedNumber(n)) poolSet.add(n);
     }
   }
 
@@ -333,6 +360,9 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
 }
 
 export async function scoreAndRank(pool, context = {}) {
+  // Filter out excluded numbers (Orange/Red) before scoring
+  const filteredPool = filterExcludedNumbers(pool);
+
   const tb = context.timeBuckets ?? (await timeBucketsSnapshot());
   const runs = context.colorRuns ?? (await recentColorRuns(50));
   const gapsExt = context.gapsExt ?? (await gapStatsExtended(500));
@@ -349,7 +379,7 @@ export async function scoreAndRank(pool, context = {}) {
     ? new Set(
         react.snapshot_top_pool
           .map((n) => Number(n))
-          .filter((n) => Number.isFinite(n) && n >= 0 && n <= 27)
+          .filter((n) => Number.isFinite(n) && n >= 0 && n <= 27 && !isExcludedNumber(n))
       )
     : new Set();
 
@@ -393,7 +423,7 @@ export async function scoreAndRank(pool, context = {}) {
       ? clamp01((Number(react.similarity) - 0.7) / 0.3)
       : 0;
 
-  const scored = pool.map((n) => {
+  const scored = filteredPool.map((n) => {
     const k = String(n);
     const col = numToColor(n);
     const qk = quadKey(n);
@@ -405,7 +435,7 @@ export async function scoreAndRank(pool, context = {}) {
     const streakScore = streakBreakHint
       ? (streakBreakHint === 'Cool' &&
           (col === 'Dark Blue' || col === 'Sky Blue' || col === 'Green')) ||
-        (streakBreakHint === 'Warm' && (col === 'Red' || col === 'Orange' || col === 'Pink')) ||
+        (streakBreakHint === 'Warm' && col === 'Pink') ||
         (streakBreakHint === 'Neutral' && col === 'Gray')
         ? 1
         : 0
@@ -422,7 +452,7 @@ export async function scoreAndRank(pool, context = {}) {
     const quadScore = Math.max(0, target - currentShare) / target;
 
     const colorTrendScore = toCluster
-      ? (toCluster === 'Warm' && (col === 'Red' || col === 'Orange' || col === 'Pink')) ||
+      ? (toCluster === 'Warm' && col === 'Pink') ||
         (toCluster === 'Cool' && (col === 'Dark Blue' || col === 'Sky Blue' || col === 'Green')) ||
         (toCluster === 'Neutral' && col === 'Gray')
         ? 1
