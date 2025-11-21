@@ -59,7 +59,13 @@ export async function getTimezone(req, res) {
 export async function windowAccuracy(req, res) {
   try {
     const days = Math.max(1, Math.min(90, Number(req.query.days || 30)));
+    const tz = process.env.SCHEDULER_TZ || 'Asia/Shanghai';
+
+    // Calculate the cutoff date in the timezone
     const q = `
+      WITH cutoff_date AS (
+        SELECT ((now() AT TIME ZONE $2)::date - ($1 || ' days')::interval)::date AS d
+      )
       SELECT
         w.window_idx,
         COUNT(*) AS total_predictions,
@@ -78,11 +84,13 @@ export async function windowAccuracy(req, res) {
         ) AS accuracy_pct
       FROM predictions p
       JOIN windows w ON w.id = p.window_id
-      WHERE p.created_at >= now() - ($1 || ' days')::interval
+      CROSS JOIN cutoff_date cd
+      WHERE w.day_date >= cd.d
+        AND w.day_date <= (now() AT TIME ZONE $2)::date
       GROUP BY w.window_idx
       ORDER BY w.window_idx;
     `;
-    const { rows } = await pool.query(q, [days]);
+    const { rows } = await pool.query(q, [days, tz]);
     res.json({ ok: true, days, rows });
   } catch (e) {
     console.error(e);
