@@ -137,7 +137,7 @@ export async function fetchWindowState(windowId) {
     status: row.status,
     start_at: row.start_at,
     end_at: row.end_at,
-    first_predict_after: row.first_predict_after,
+    first_predict_after: row.first_predict_after, // Keep for internal use (now equals start_at, no delay)
     active_pattern: row.active_pattern,
     pattern_code: ps?.pattern_code || row.active_pattern || 'A',
     wrong_streak: Number(ps?.wrong_streak || 0),
@@ -180,11 +180,31 @@ export async function canPredict(windowId, { channel = 'local' } = {}) {
   if (!ws) return { can: false, reason: 'no_window' };
 
   const now = new Date();
+  const windowStart = new Date(ws.start_at);
 
   if (ws.status !== 'open') {
     return { can: false, reason: 'window_closed', until: ws.end_at };
   }
 
+  // CRITICAL: Only check window start time for FIRST prediction in this window
+  // If predictions already exist for this window, skip this check (normal flow)
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM predictions WHERE window_id = $1 LIMIT 1`,
+    [windowId]
+  );
+  const existingPredictions = rows[0]?.count || 0;
+
+  // Only block if: before window start AND no predictions exist yet (first time)
+  if (existingPredictions === 0 && now < windowStart) {
+    return {
+      can: false,
+      reason: 'before_window_start',
+      until: windowStart,
+      message: `Window hasn't started yet. Starts in ${Math.round((windowStart.getTime() - now.getTime()) / 60000)} minutes.`,
+    };
+  }
+
+  // first_predict_after now equals start_at (no delay), so this check ensures we're at or after window start
   if (channel !== 'local' && now < new Date(ws.first_predict_after)) {
     return { can: false, reason: 'before_first_predict_after', until: ws.first_predict_after };
   }

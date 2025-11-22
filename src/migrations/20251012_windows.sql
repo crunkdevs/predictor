@@ -123,7 +123,9 @@ BEGIN
     -- shift local -> tz -> utc
     s_utc := (start_local AT TIME ZONE p_tz) AT TIME ZONE 'UTC';
     e_utc := (end_local   AT TIME ZONE p_tz) AT TIME ZONE 'UTC';
-    first_after := s_utc + make_interval(mins => p_first_delay_min);
+    -- Set first_predict_after = start_at (predictions start immediately, no delay)
+    -- Keeping the field for backwards compatibility but setting it to start_at
+    first_after := s_utc;
 
     INSERT INTO windows (day_date, window_idx, start_at, end_at, first_predict_after, type, status, active_pattern)
     VALUES (p_day, i, s_utc, e_utc, first_after, CASE WHEN i=0 THEN 'Start' ELSE 'Normal' END, 'open', 'A')
