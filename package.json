@@ -12,7 +12,8 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "migrate": "node scripts/run-all-migrations.js",
-    "migrate:single": "node scripts/run-sql.js"
+    "migrate:single": "node scripts/run-sql.js",
+    "md-to-html": "node scripts/md-to-pdf.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
