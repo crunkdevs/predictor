@@ -115,10 +115,11 @@ When making a prediction, the system builds a pool of candidate numbers:
 - If pool still needs numbers:
   - Gets list of all numbers sorted by how long since last appearance
   - Adds numbers that haven't appeared recently
-  - Prioritizes numbers with longest gaps
+  - Prioritizes numbers with longest gaps, but **hard caps this pure gap fill to 4 slots** so the pool is not flooded
+  - Any remaining slots fall back to the usual transition/balance logic instead of more overdue chasing
 
 **Step 4: Smart Overdue Selection (NEW)**
-- If pool still needs numbers:
+- If pool still needs numbers (after the Pattern C cap and other logic):
   - Uses context-aware overdue selection instead of simple fallback
   - **How it works:**
     - System tracks when overdue numbers (gap >= 40 spins) actually hit
@@ -143,12 +144,13 @@ When making a prediction, the system builds a pool of candidate numbers:
 
 Each number in the pool is scored using multiple weighted factors:
 
-**Factor 1: Gap Pressure (22% weight)**
-- Default weight: **0.22**
+**Factor 1: Gap Pressure (18% weight)**
+- Default weight: **0.18**
 - Calculates how long since this number appeared
 - Calculates the median gap for this number historically
 - Numbers that haven't appeared in **30 or more spins** get maximum gap pressure
 - Higher score means the number is more overdue
+- Weight was trimmed from 0.22 specifically to keep overdue logic from overpowering other balanced signals
 
 **Factor 2: Streak Break (18% weight)**
 - Default weight: **0.18**
@@ -159,8 +161,8 @@ Each number in the pool is scored using multiple weighted factors:
   - If neutral (Gray) is running → predicts neutral
 - Score: 1.0 if number matches predicted break color, 0.0 otherwise
 
-**Factor 3: Color Balance (14% weight)**
-- Default weight: **0.14**
+**Factor 3: Color Balance (16% weight)**
+- Default weight: **0.16**
 - Analyzes color distribution in last **10 minutes**
 - Calculates "color pressure" for each color
 - Colors that appeared less frequently get higher pressure
@@ -185,8 +187,8 @@ Each number in the pool is scored using multiple weighted factors:
   - Calculates boost based on similarity (higher similarity = higher boost)
 - Score: The boost value if number matches, 0.0 otherwise
 
-**Factor 7: Quad Parity (8% weight)**
-- Default weight: **0.08**
+**Factor 7: Quad Parity (10% weight)**
+- Default weight: **0.10**
 - Divides numbers into 4 quadrants:
   - Even-Small, Even-Big, Odd-Small, Odd-Big
 - Analyzes distribution of these quadrants in last **200 results**
@@ -212,6 +214,12 @@ All factors are combined with their weights to create a total score for each num
 - Numbers are sorted by score (highest first)
 - Top **5** become "hot" numbers (primary predictions)
 - Numbers **6-13** become "cold" numbers (secondary predictions)
+
+**Overdue Guardrail (NEW):**
+- After hot/cold split, the system enforces a **hard cap of 4 overdue numbers across the entire set of 13**
+- Top 5 are never reshuffled; any adjustments happen only in the cold section
+- If too many cold numbers are overdue, replacements start from the lowest-ranked cold entries and pull the highest-scoring non-overdue candidates from the remaining list
+- If there simply are not enough non-overdue candidates, the system keeps the best available mix but logs that the cap could not be fully satisfied
 
 ### 6. Signal Detection - How It Works
 
@@ -616,6 +624,11 @@ The system runs scheduled tasks to:
 - Pattern B: Trust balance (distribution thinking)
 - Pattern C: Trust gaps (overdue thinking)
 
+**Why an Overdue Cap?**
+- Overdue modes can snowball, so the final 13 enforce a **maximum of 4 overdue numbers**
+- Top 5 remain untouched; adjustments only swap out low-ranked cold numbers if overdue count is too high
+- This keeps overdue pressure meaningful without letting it dominate the predictions
+
 **Why AI Has Limits?**
 - AI is expensive and slower
 - Local predictions are usually sufficient
@@ -726,6 +739,7 @@ When the pool needs more numbers:
 4. **Select:**
    - Picks the best candidate (if any meet the criteria)
    - Adds at most 1 smart overdue number to the pool
+   - Still respects the global 4-overdue cap once the final rankings are assembled
 
 ### Why This Is Better
 

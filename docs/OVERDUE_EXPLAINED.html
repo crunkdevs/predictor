@@ -1,0 +1,50 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Number Selection and Ranking Process</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+    h2 { color: #34495e; margin-top: 30px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }
+    h3 { color: #555; margin-top: 20px; }
+    code {
+      background: #f4f4f4;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+    }
+    pre {
+      background: #f8f8f8;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      padding: 15px;
+      overflow-x: auto;
+    }
+    pre code {
+      background: none;
+      padding: 0;
+    }
+    li { margin: 5px 0; }
+    hr { border: none; border-top: 2px solid #ecf0f1; margin: 30px 0; }
+    strong { color: #2c3e50; }
+    @media print {
+      body { max-width: 100%; }
+      h1, h2 { page-break-after: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Overdue Behaviour – Deep Dive</h1></p><p>This document focuses exclusively on how overdue numbers are detected, prioritized, and capped inside the Predictor. Use it when you need to reason about “gap-driven” logic without re-reading the entire Predictor overview.</p><p>---</p><p><h2>1. Definition of “Overdue”</h2></p><p>- A number is considered <strong>overdue</strong> when its “gap” (spins since it last appeared) is <strong>40 or higher</strong>.<br>- The gap value comes from <code>gapStatsExtended</code>, which tracks both the latest “since” gaps and the historical median gaps.<br>- Orange and Red numbers are excluded globally, so they never count toward overdue logic.</p><p>> <strong>Note:</strong> The same threshold (gap ≥ 40) is used by Smart Overdue, the Pattern C builder, and the final global cap. We avoid mixed definitions to keep the system predictable.</p><p>---</p><p><h2>2. Where Overdue Shows Up</h2></p><p>| Layer | How overdue is used | Guardrails |<br>| --- | --- | --- |<br>| <strong>Pattern C pool fill</strong> | If the pool still needs numbers, add the longest-gap candidates first. | Hard cap of <strong>4</strong> “pure gap” adds; after that, we fall back to non-overdue logic so the pool is not flooded. |<br>| <strong>Smart Overdue</strong> | Context-aware injection that looks for overdue candidates with 40%+ success in similar color contexts. | Adds <strong>at most 1</strong> number and only if there is still room in the pool. |<br>| <strong>Gap Pressure scoring factor</strong> | Weighted component (now <strong>0.18</strong>) in the multi-factor score. | Weight reduced so overdue does not dominate the ranking. |<br>| <strong>Global selection cap</strong> | After ranking, the final 13 (Top 5 + Cold 8) can contain <strong>no more than 4 overdue numbers</strong>. | Top 5 stay untouched; replacements happen only in cold positions, starting from the lowest ranks. |</p><p>---</p><p><h2>3. Pattern C Pool Builder</h2></p><p><li>Run transitions and reactivation logic as usual.</li><br><li>If Pattern C is active and the pool still has gaps:</li><br>   - Sort remaining candidates by gap descending.<br>   - Add them one by one <strong>up to a cap of 4</strong> (the value used in code is <code>MAX_PURE_GAP_CANDIDATES = 4</code>).<br><li>If the pool is still short after the cap:</li><br>   - Use the normal fallback logic (opposite parity/size, generic fillers) rather than more overdue numbers.</p><p><strong>Why?</strong> Pattern C was previously overwhelming the pool with overdue picks, which then cascaded down into scoring and final selection. The cap keeps the overdue influence intentional but bounded.</p><p>---</p><p><h2>4. Smart Overdue – The “Brains”</h2></p><p>Smart Overdue is run <strong>after</strong> the pattern-specific pool logic and <strong>before</strong> the final generic fill.</p><p>- Uses the same gap threshold (≥ 40) but requires:<br>  - At least 6 global overdue candidates.<br>  - Each candidate to have ≥ 10 historical “overdue hits” in the same previous-color context.<br>  - Success rate ≥ 40%.<br>- Ranks by success rate, then by gap.<br>- Adds <strong>only one</strong> candidate.</p><p>Smart Overdue is intentionally late in the pipeline so it remains the *primary* way a deep-overdue idea enters the pool.</p><p>---</p><p><h2>5. Gap Pressure Weight Tuning</h2></p><p>- Previous weight: <strong>0.22</strong> of the total score.<br>- New weight: <strong>0.18</strong> with small compensating boosts to Color Balance (0.16) and Quad Parity (0.10).</p><p>Rationale: overdue numbers were landing in the Top 5 too easily because the weight pushed high-gap entries up the ranking curve. The lower weight still rewards gaps, but it no longer crowds out balance-oriented signals.</p><p>---</p><p><h2>6. Global Overdue Cap (Max 4)</h2></p><p>After scoring and sorting:</p><p><li>Top 5 hot numbers are fixed—<strong>never</strong> reordered or swapped in this step.</li><br><li>The remaining 8 cold slots get adjusted if necessary:</li><br>   - Count total overdue numbers in the 13.<br>   - If the count is ≤ 4, do nothing.<br>   - If > 4, compute how many hot numbers are overdue and allow only the remainder in the cold section.<br>   - Replace excess overdue cold numbers, starting from the lowest-ranked positions, with the best available non-overdue candidates from the remaining ranked list.<br><li>If there are not enough non-overdue candidates to satisfy the cap, the system keeps the highest-quality mix available but logs the failure.</li></p><p>This final guardrail ensures the output has a healthy mix of signals even when the environment is strongly gap-biased.</p><p>---</p><p><h2>7. FAQ</h2></p><p><strong>Q: Why not remove Pattern C entirely?</strong>  <br>A: Pattern C remains valuable when gaps truly matter. The cap mechanism lets us benefit from overdue pressure without letting it dominate.</p><p><strong>Q: Why 40 spins?</strong>  <br>A: The historical analytics showed that gap ≥ 40 is where “meaningfully overdue” behaviour starts. Using the same threshold everywhere keeps reasoning consistent.</p><p><strong>Q: Can the cap break when almost every candidate is overdue?</strong>  <br>A: In extreme edge cases there may be fewer than 9 non-overdue numbers available. In that scenario, the system keeps as many non-overdue replacements as possible and emits a diagnostic log so we can investigate.<br>
+</body>
+</html>
+  

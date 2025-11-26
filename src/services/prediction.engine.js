@@ -83,6 +83,21 @@ function clamp01(x) {
 
 const quadKey = (n) => `${parityOf(n)}_${sizeOf(n)}`;
 
+/**
+ * Check if a number is considered overdue based on gap threshold
+ * @param {number} n - Number to check
+ * @param {Object} gapsExt - Extended gap stats with numbers.since map
+ * @returns {boolean} - True if number is overdue (gap >= 40, same threshold as Smart Overdue)
+ */
+function isOverdueNumber(n, gapsExt) {
+  if (isExcludedNumber(n)) return false;
+  const sinceMap = gapsExt?.numbers?.since || {};
+  const gap = sinceMap[String(n)];
+  // Use same threshold as Smart Overdue: gap >= 40
+  const OVERDUE_THRESHOLD = 40;
+  return gap != null && Number(gap) >= OVERDUE_THRESHOLD;
+}
+
 async function getFourClassShares(limit = 200) {
   const rows = await fetchRecentSpins(Math.max(50, Math.min(500, Number(limit) || 200)));
   if (!rows?.length) {
@@ -317,16 +332,24 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
   }
 
   if (poolSet.size < POOL_SIZE && pattern_code === 'C') {
+    // Cap the number of pure 'largest-gap' candidates for Pattern C to avoid overloading the pool with overdue numbers.
+    const MAX_PURE_GAP_CANDIDATES = 4;
     const candidates = Object.keys(sinceMap)
       .map((k) => ({ n: Number(k), since: sinceMap[k] == null ? Infinity : Number(sinceMap[k]) }))
       .filter((x) => Number.isFinite(x.n) && !isExcludedNumber(x.n))
       .sort((a, b) => (b.since === a.since ? a.n - b.n : b.since - a.since));
+    let pureGapAdded = 0;
     for (const c of candidates) {
       if (poolSet.size >= POOL_SIZE) break;
-      if (!poolSet.has(c.n)) poolSet.add(c.n);
+      if (!poolSet.has(c.n)) {
+        poolSet.add(c.n);
+        pureGapAdded++;
+        if (pureGapAdded >= MAX_PURE_GAP_CANDIDATES) break;
+      }
     }
   }
 
+  // Smart Overdue is the main context-aware overdue injection point; Pattern C's dumb gap fill is intentionally capped.
   // Smart overdue selection - replace old overdue fallback
   if (poolSet.size < POOL_SIZE) {
     const currentPool = Array.from(poolSet);
@@ -408,13 +431,16 @@ export async function scoreAndRank(pool, context = {}) {
   const smallPct = Number(ratio?.small_big?.small_pct ?? NaN);
 
   const W = {
-    gapPressure: Number(process.env.W_GAP_PRESSURE ?? 0.22),
+    // Reduced gap pressure weight from 0.22 to 0.18 to avoid over-emphasizing raw overdue gaps.
+    gapPressure: Number(process.env.W_GAP_PRESSURE ?? 0.18),
     streakBreak: Number(process.env.W_STREAK_BREAK ?? 0.18),
-    colorBalance: Number(process.env.W_COLOR_BALANCE ?? 0.14),
+    // Slightly increased to compensate for gap pressure reduction
+    colorBalance: Number(process.env.W_COLOR_BALANCE ?? 0.16),
     parityRotation: Number(process.env.W_PARITY_ROTATION ?? 0.18),
     sizeRegime: Number(process.env.W_SIZE_REGIME ?? 0.18),
     reactivationBoost: Number(process.env.W_REACTIVATION ?? 0.1),
-    quadParity: Number(process.env.W_QUAD_PARITY ?? 0.08),
+    // Slightly increased to compensate for gap pressure reduction
+    quadParity: Number(process.env.W_QUAD_PARITY ?? 0.1),
     trendReversal: Number(process.env.W_TREND_REVERSAL ?? 0.06),
   };
 
@@ -625,9 +651,65 @@ export async function localPredict({ windowId, context = {} }) {
   const candidatePool = await buildNumberPool({ last, pattern_code, context });
   const ranked = await scoreAndRank(candidatePool, context);
 
-  const top5 = ranked.slice(0, 5).map((r) => r.n);
+  // Get gap stats for overdue detection
+  const gapsExt = context.gapsExt ?? (await gapStatsExtended(500));
 
-  const pool = ranked.slice(5, 13).map((r) => r.n);
+  // Initial selection: Top 5 (hot) and positions 6-13 (cold)
+  let top5 = ranked.slice(0, 5).map((r) => r.n);
+  let pool = ranked.slice(5, 13).map((r) => r.n);
+
+  // Enforce global overdue cap: max 4 overdue numbers across all 13 (preserving Top 5)
+  const MAX_OVERDUE_IN_FINAL_13 = 4;
+  const final13 = [...top5, ...pool];
+  const overdueInTop5 = top5.filter((n) => isOverdueNumber(n, gapsExt)).length;
+  const allowedOverdueCold = Math.max(0, MAX_OVERDUE_IN_FINAL_13 - overdueInTop5);
+
+  // Count overdue in cold section
+  const overdueInCold = pool.filter((n) => isOverdueNumber(n, gapsExt)).length;
+
+  if (overdueInCold > allowedOverdueCold) {
+    // Need to replace some overdue cold numbers with non-overdue candidates
+    // Track which numbers are already in final 13 to avoid duplicates
+    const poolSet = new Set(final13);
+    const overdueColdIndices = [];
+    for (let i = 0; i < pool.length; i++) {
+      if (isOverdueNumber(pool[i], gapsExt)) {
+        overdueColdIndices.push(i);
+      }
+    }
+
+    // Replace from lowest-ranked (highest index) first
+    overdueColdIndices.reverse();
+    const toReplace = overdueInCold - allowedOverdueCold;
+
+    // Find non-overdue candidates from remaining ranked list
+    const remainingCandidates = ranked.slice(13).filter((r) => !poolSet.has(r.n));
+
+    let replaced = 0;
+    for (let idx of overdueColdIndices) {
+      if (replaced >= toReplace) break;
+
+      // Find highest-scoring non-overdue candidate that's not already in final 13
+      const replacement = remainingCandidates.find(
+        (r) => !isOverdueNumber(r.n, gapsExt) && !poolSet.has(r.n)
+      );
+      if (replacement) {
+        const oldNumber = pool[idx];
+        pool[idx] = replacement.n;
+        // Update poolSet: remove old number, add new number
+        poolSet.delete(oldNumber);
+        poolSet.add(replacement.n);
+        // Remove from remaining candidates to avoid duplicates
+        const replacementIdx = remainingCandidates.findIndex((r) => r.n === replacement.n);
+        if (replacementIdx >= 0) remainingCandidates.splice(replacementIdx, 1);
+        replaced++;
+      } else {
+        // No more non-overdue candidates available - keep the overdue number
+        // This is a graceful failure case
+        break;
+      }
+    }
+  }
 
   return {
     allowed: true,

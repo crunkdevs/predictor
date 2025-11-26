@@ -31,8 +31,8 @@ function markdownToHTML(md) {
   return html;
 }
 
-const mdFile = join(__dirname, '../docs/LEARNING_FROM_FEEDBACK.md');
-const htmlFile = join(__dirname, '../docs/LEARNING_FROM_FEEDBACK.html');
+const mdFile = join(__dirname, '../docs/OVERDUE_EXPLAINED.md');
+const htmlFile = join(__dirname, '../docs/OVERDUE_EXPLAINED.html');
 
 try {
   const mdContent = readFileSync(mdFile, 'utf-8');
@@ -88,10 +88,9 @@ try {
   `;
 
   writeFileSync(htmlFile, htmlContent, 'utf-8');
-  console.log('✅ HTML file created: docs/LEARNING_FROM_FEEDBACK.html');
+  console.log('✅ HTML file created: docs/OVERDUE_EXPLAINED.html');
   console.log('📄 Open in browser and use Print → Save as PDF');
 } catch (error) {
   console.error('❌ Error:', error.message);
   process.exit(1);
 }
-
