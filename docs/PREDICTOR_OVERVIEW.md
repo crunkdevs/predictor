@@ -120,19 +120,24 @@ When making a prediction, the system builds a pool of candidate numbers:
 
 **Step 4: Smart Overdue Selection (NEW)**
 - If pool still needs numbers (after the Pattern C cap and other logic):
-  - Uses context-aware overdue selection instead of simple fallback
+  - Uses context-aware overdue selection with funnel-based filtering
   - **How it works:**
-    - System tracks when overdue numbers (gap >= 40 spins) actually hit
-    - Remembers the context: what was the previous number's color when this overdue number hit?
-    - When selecting overdue numbers, looks at historical patterns:
-      - "When number X was overdue, did it hit more often after Red numbers or Blue numbers?"
-    - Only picks overdue numbers that have a good historical track record in the current context
-    - Requires sufficient historical data (at least 10 past occurrences) before trusting a pattern
-    - Adds at most **1 smart overdue number** to the pool
+    1. **Generate Candidates:** Collects all overdue numbers (gap >= 40 spins, excluding Red/Orange)
+    2. **Funnel 1 - Color Match:** Filters to numbers matching the last result's color
+    3. **Funnel 2 - Size Match:** Filters to numbers matching the last result's size (small/big)
+    4. **Funnel 3 - Parity Match:** Filters to numbers matching the last result's parity (odd/even)
+    5. **Fallback Rule:** If any funnel yields zero candidates, falls back to the previous candidate list
+    6. **Historical Scoring:** Only filtered candidates are evaluated using historical patterns:
+       - System tracks when overdue numbers (gap >= 40 spins) actually hit
+       - Remembers the context: what was the previous number's color when this overdue number hit?
+       - Looks at historical patterns: "When number X was overdue, did it hit more often after Red numbers or Blue numbers?"
+       - Requires sufficient historical data (at least 10 past occurrences) before trusting a pattern
+       - Requires success rate ≥ 40% in the current color context
+    7. **Selection:** Ranks by success rate, then by gap, and adds at most **1 smart overdue number** to the pool
   - **Why this is better:**
     - Old method: Just picked any overdue number (gap >= 50)
-    - New method: Picks overdue numbers that historically hit in similar situations
-    - Learns from past: "Number 15 tends to hit when overdue after Red numbers"
+    - New method: Uses three-stage funnel to prioritize numbers matching last result's properties, then picks from those using historical success patterns
+    - More contextually aligned: "Number 15 tends to hit when overdue after Red numbers, and it's also a small odd number like the last result"
 
 **Step 5: Complete Fill**
 - If pool still has fewer than 13 numbers:
@@ -722,21 +727,30 @@ Instead of blindly picking any overdue number, the system now learns from histor
 When the pool needs more numbers:
 
 1. **Find Overdue Candidates:**
-   - Looks for numbers that haven't appeared in 40+ spins
+   - Looks for numbers that haven't appeared in 40+ spins (excluding Red/Orange)
    - Needs at least 6 such numbers before considering smart selection
 
-2. **Check Historical Patterns:**
-   - For each overdue number, asks: "Has this number hit when overdue in similar situations before?"
+2. **Apply Funnel-Based Filtering:**
+   - **Funnel 1 - Color Match:** Filters to numbers matching the last result's color
+     - If zero candidates, falls back to full overdue list
+   - **Funnel 2 - Size Match:** Filters to numbers matching the last result's size (small/big)
+     - If zero candidates, falls back to previous funnel's output
+   - **Funnel 3 - Parity Match:** Filters to numbers matching the last result's parity (odd/even)
+     - If zero candidates, falls back to previous funnel's output
+
+3. **Check Historical Patterns:**
+   - Only evaluates candidates that survived the funnels
+   - For each filtered overdue number, asks: "Has this number hit when overdue in similar situations before?"
    - Compares current context (last number's color) with historical patterns
    - Calculates success rate: "Out of all times this number was overdue, how often did it hit with this color context?"
 
-3. **Filter and Rank:**
+4. **Filter and Rank:**
    - Only considers numbers with:
      - At least 10 historical occurrences (enough data to trust)
      - At least 40% success rate in this context (proven pattern)
    - Ranks by: success rate first, then how overdue (larger gap = higher priority)
 
-4. **Select:**
+5. **Select:**
    - Picks the best candidate (if any meet the criteria)
    - Adds at most 1 smart overdue number to the pool
    - Still respects the global 4-overdue cap once the final rankings are assembled
@@ -749,8 +763,9 @@ When the pool needs more numbers:
 - Could pick numbers that historically don't work in current situation
 
 **New Method:**
+- Uses three-stage funnel to prioritize numbers matching last result's properties (color, size, parity)
 - Learns from past: "This number works in this context"
-- Context-aware: Matches current situation with historical patterns
+- Context-aware: Matches current situation with historical patterns AND last result's characteristics
 - Conservative: Only acts when there's enough evidence
 - Improves over time: More data = better patterns
 
@@ -765,7 +780,11 @@ When the pool needs more numbers:
 - Would pick 20 (larger gap) or both
 
 **New Method:**
-- Checks history: "When 15 was overdue, did it hit more after Red numbers?"
+- Applies funnel filtering:
+  - Funnel 1: Both 15 and 20 match Red color? (Yes, if both are Red)
+  - Funnel 2: Both match last result's size? (e.g., if last was small, only small numbers pass)
+  - Funnel 3: Both match last result's parity? (e.g., if last was odd, only odd numbers pass)
+- Checks history for filtered candidates: "When 15 was overdue, did it hit more after Red numbers?"
 - Checks history: "When 20 was overdue, did it hit more after Red numbers?"
 - If 15 has 60% success rate after Red (with 15+ samples) and 20 has 30% success rate after Red
-- Picks 15 (better historical match for current context)
+- Picks 15 (better historical match for current context, and matches last result's properties)

@@ -19,7 +19,7 @@ This document focuses exclusively on how overdue numbers are detected, prioritiz
 | Layer | How overdue is used | Guardrails |
 | --- | --- | --- |
 | **Pattern C pool fill** | If the pool still needs numbers, add the longest-gap candidates first. | Hard cap of **4** “pure gap” adds; after that, we fall back to non-overdue logic so the pool is not flooded. |
-| **Smart Overdue** | Context-aware injection that looks for overdue candidates with 40%+ success in similar color contexts. | Adds **at most 1** number and only if there is still room in the pool. |
+| **Smart Overdue** | Context-aware injection with three-stage funnel (color, size, parity matching last result) that looks for overdue candidates with 40%+ success in similar color contexts. | Adds **at most 1** number and only if there is still room in the pool. |
 | **Gap Pressure scoring factor** | Weighted component (now **0.18**) in the multi-factor score. | Weight reduced so overdue does not dominate the ranking. |
 | **Global selection cap** | After ranking, the final 13 (Top 5 + Cold 8) can contain **no more than 4 overdue numbers**. | Top 5 stay untouched; replacements happen only in cold positions, starting from the lowest ranks. |
 
@@ -38,16 +38,41 @@ This document focuses exclusively on how overdue numbers are detected, prioritiz
 
 ---
 
-## 4. Smart Overdue – The “Brains”
+## 4. Smart Overdue – The "Brains"
 
 Smart Overdue is run **after** the pattern-specific pool logic and **before** the final generic fill.
 
-- Uses the same gap threshold (≥ 40) but requires:
-  - At least 6 global overdue candidates.
-  - Each candidate to have ≥ 10 historical “overdue hits” in the same previous-color context.
-  - Success rate ≥ 40%.
-- Ranks by success rate, then by gap.
-- Adds **only one** candidate.
+### Funnel-Based Filtering System
+
+Smart Overdue uses a three-stage funnel to narrow down overdue candidates before scoring:
+
+1. **Generate Overdue Candidates:**
+   - Collects all numbers with gap ≥ 40 (excluding Red/Orange)
+   - Requires at least 6 global overdue candidates to proceed
+
+2. **Funnel 1: Color Match**
+   - Filters candidates to only those matching the last result's color
+   - If this yields zero candidates, falls back to the full overdue candidate list
+
+3. **Funnel 2: Size Match**
+   - From the previous funnel's output, filters to only those matching the last result's size (small/big)
+   - If this yields zero candidates, falls back to the previous funnel's output
+
+4. **Funnel 3: Parity Match**
+   - From the previous funnel's output, filters to only those matching the last result's parity (odd/even)
+   - If this yields zero candidates, falls back to the previous funnel's output
+
+5. **Historical Scoring:**
+   - Only the candidates that survive the funnels are evaluated using historical stats
+   - Each candidate must have:
+     - ≥ 10 historical "overdue hits" in the same previous-color context
+     - Success rate ≥ 40% in that context
+   - Ranks by success rate, then by gap
+
+6. **Selection:**
+   - Adds **only one** candidate (the top-ranked after funneling and scoring)
+
+**Why Funnels?** This system prioritizes overdue numbers that match the last result's properties (color, size, parity), creating a more contextually aligned selection. The fallback mechanism ensures we never lose all candidates if a funnel is too restrictive.
 
 Smart Overdue is intentionally late in the pipeline so it remains the *primary* way a deep-overdue idea enters the pool.
 
