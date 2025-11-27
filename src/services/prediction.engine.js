@@ -98,6 +98,38 @@ function isOverdueNumber(n, gapsExt) {
   return gap != null && Number(gap) >= OVERDUE_THRESHOLD;
 }
 
+/**
+ * Get a snapshot of overdue status for all numbers
+ * @returns {Promise<Object>} Object with threshold and numbers array
+ */
+export async function getOverdueSnapshot() {
+  const gapsExt = await gapStatsExtended(500);
+  const sinceMap = gapsExt?.numbers?.since || {};
+  const gapsMap = gapsExt?.numbers?.gaps || {};
+  const OVERDUE_THRESHOLD = 40;
+
+  const numbers = [];
+  for (let n = 0; n <= 27; n++) {
+    if (isExcludedNumber(n)) continue;
+
+    const gapSpins = sinceMap[String(n)] == null ? null : Number(sinceMap[String(n)]);
+    const medianGap = gapsMap[String(n)]?.median ? Number(gapsMap[String(n)].median) : null;
+    const isOverdue = gapSpins != null && gapSpins >= OVERDUE_THRESHOLD;
+
+    numbers.push({
+      number: n,
+      isOverdue,
+      gapSpins,
+      medianGap,
+    });
+  }
+
+  return {
+    threshold: OVERDUE_THRESHOLD,
+    numbers,
+  };
+}
+
 async function getFourClassShares(limit = 200) {
   const rows = await fetchRecentSpins(Math.max(50, Math.min(500, Number(limit) || 200)));
   if (!rows?.length) {

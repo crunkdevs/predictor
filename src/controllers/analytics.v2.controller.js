@@ -29,6 +29,7 @@ import {
 } from '../analytics/analytics.handlers.js';
 import { detectFrequencyDeviation } from '../services/deviation.service.js';
 import { detectTrendReversal } from '../services/trend.service.js';
+import { getOverdueSnapshot } from '../services/prediction.engine.js';
 
 const ok = (res, data) => res.json({ ok: true, ...data });
 const bad = (res, code, msg) => res.status(code).json({ ok: false, error: msg });
@@ -525,6 +526,16 @@ export async function coreBundleForLatest(req, res) {
     });
   } catch (e) {
     console.error('[v2.coreBundleForLatest]', e);
+    return bad(res, 500, e?.message || 'failed');
+  }
+}
+
+export async function overdue(req, res) {
+  try {
+    const snapshot = await getOverdueSnapshot();
+    return ok(res, snapshot);
+  } catch (e) {
+    console.error('[v2.overdue]', e);
     return bad(res, 500, e?.message || 'failed');
   }
 }

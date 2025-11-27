@@ -36,4 +36,6 @@ router.get('/v2/trend/reversal-bias', v2.reversalBias);
 
 router.get('/v2/timezone', v2.getTimezone);
 
+router.get('/v2/overdue', v2.overdue);
+
 export default router;
