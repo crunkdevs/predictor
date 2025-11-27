@@ -219,15 +219,15 @@ async function getOverdueStatsForNumber(number, ctxPrevColor) {
 /**
  * Smart overdue picker - selects overdue numbers based on historical context
  * @param {Array<number>} pool - Current pool array
- * @param {Object} context - Context object with gapsByNumber, prevColor, db
+ * @param {Object} context - Context object with gapsByNumber, prevColor, targetParity, targetSize
  * @returns {Promise<Array<number>>} - Updated pool with smart overdue numbers added
  */
 async function pickSmartOverdues(pool, context) {
-  const { gapsByNumber, prevColor } = context;
+  const { gapsByNumber, prevColor, targetParity, targetSize } = context;
 
   if (!prevColor) return pool; // Need context to make smart decisions
 
-  // 1) Collect overdue candidates (exclude Orange/Red)
+  // 1) Collect overdue candidates (exclude Orange/Red, gap >= 40)
   const overdueCandidates = [];
   for (let n = 0; n <= 27; n++) {
     if (isExcludedNumber(n)) continue;
@@ -242,10 +242,40 @@ async function pickSmartOverdues(pool, context) {
     return pool;
   }
 
+  // 2) Apply funnel-based filtering
+  let filteredCandidates = overdueCandidates;
+
+  // Funnel 1: Same color as last number (prevColor)
+  if (prevColor) {
+    const colorFiltered = filteredCandidates.filter((n) => numToColor(n) === prevColor);
+    if (colorFiltered.length > 0) {
+      filteredCandidates = colorFiltered;
+    }
+    // If zero candidates, fall back to previous list (already set to overdueCandidates)
+  }
+
+  // Funnel 2: Same size (small/big) as last number (targetSize)
+  if (targetSize) {
+    const sizeFiltered = filteredCandidates.filter((n) => sizeOf(n) === targetSize);
+    if (sizeFiltered.length > 0) {
+      filteredCandidates = sizeFiltered;
+    }
+    // If zero candidates, fall back to previous list
+  }
+
+  // Funnel 3: Same parity (odd/even) as last number (targetParity)
+  if (targetParity) {
+    const parityFiltered = filteredCandidates.filter((n) => parityOf(n) === targetParity);
+    if (parityFiltered.length > 0) {
+      filteredCandidates = parityFiltered;
+    }
+    // If zero candidates, fall back to previous list
+  }
+
   const scored = [];
 
-  // 2) Evaluate each overdue number based on history
-  for (const n of overdueCandidates) {
+  // 3) Evaluate each filtered overdue number based on history
+  for (const n of filteredCandidates) {
     const stats = await getOverdueStatsForNumber(n, prevColor);
     if (!stats) continue;
 
@@ -258,10 +288,10 @@ async function pickSmartOverdues(pool, context) {
     scored.push({ n, successRate, gap });
   }
 
-  // 3) Sort by success rate + gap
+  // 4) Sort by success rate + gap
   scored.sort((a, b) => b.successRate - a.successRate || b.gap - a.gap);
 
-  // 4) Add max 1 overdue number
+  // 5) Add max 1 overdue number
   let added = 0;
   for (const { n } of scored) {
     if (added >= OVERDUE_CONFIG.MAX_OVERDUE_PER_PREDICTION) break;
@@ -386,6 +416,8 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
   if (poolSet.size < POOL_SIZE) {
     const currentPool = Array.from(poolSet);
     const lastColor = Number.isFinite(last) ? numToColor(last) : null;
+    const targetParity = Number.isFinite(last) ? parityOf(last) : null;
+    const targetSize = Number.isFinite(last) ? sizeOf(last) : null;
     const gapsByNumber = {};
     for (let n = 0; n <= 27; n++) {
       if (isExcludedNumber(n)) continue;
@@ -396,6 +428,8 @@ export async function buildNumberPool({ last, pattern_code, context = {} }) {
     const poolWithOverdues = await pickSmartOverdues(currentPool, {
       gapsByNumber,
       prevColor: lastColor,
+      targetParity,
+      targetSize,
     });
 
     // Add smart overdue numbers to poolSet
